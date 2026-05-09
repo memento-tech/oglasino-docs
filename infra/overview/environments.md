@@ -48,17 +48,21 @@ TBD — populated during Phase 1.
 
 ## Stage
 
-| Component | Detail |
-|---|---|
-| Backend | Spring Boot in Docker on oglasino-stage droplet (image not yet published — Phase 3C) |
-| Database | Postgres 16 in Docker on oglasino-stage droplet |
-| Cache | Redis 7 in Docker on oglasino-stage droplet |
-| Search | Elasticsearch 8.13.4 in Docker on oglasino-stage droplet (single-node, security disabled) |
-| Frontend (Web) | Vercel — `oglasino-web-stage` env (Phase 1E pending) |
-| Frontend (Mobile) | EAS profile `preview` for Internal Testing / TestFlight (Phase 3E pending) |
-| CDN/Workers | Cloudflare oglasino-images-stage + oglasino-router-stage (Phase 1C pending) |
-| Firebase | oglasino-stage-49abb |
-| Domains | api-stage.oglasino.com, stage.oglasino.com, cdn-stage.oglasino.com, api-origin-stage.oglasino.com (DNS in Phase 1C) |
+| Component | Detail | Status |
+|---|---|---|
+| Backend | Spring Boot in Docker on oglasino-stage droplet | Image not yet published — Phase 3C |
+| Database | Postgres 16 in Docker on oglasino-stage droplet | Running |
+| Cache | Redis 7 in Docker on oglasino-stage droplet | Running |
+| Search | Elasticsearch 8.13.4 in Docker on oglasino-stage droplet | Running |
+| Frontend (Web) | Vercel — stage env | Phase 1E pending |
+| Frontend (Mobile) | EAS profile `preview` | Phase 3E pending |
+| CDN | Cloudflare oglasino-images-stage | Running (since pre-Phase 1) |
+| Router | Cloudflare oglasino-router-stage | Running (Phase 1C) |
+| Firebase | oglasino-stage-49abb | Configured (Phase 1A) |
+| Domain — frontend | stage.oglasino.com | DNS deferred (Phase 1E) |
+| Domain — API | api-stage.oglasino.com | Configured (Phase 1C) — Worker reachable, awaiting backend |
+| Domain — origin (Worker→droplet) | api-origin-stage.oglasino.com | Configured (Phase 1C) — gray cloud |
+| Domain — CDN | cdn-stage.oglasino.com | Configured |
 
 ---
 

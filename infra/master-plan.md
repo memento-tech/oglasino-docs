@@ -28,12 +28,17 @@ populated when the item completes.
 - [x] **1B.6** Document droplet config in `digitalocean/droplets.md`
 
 ### 1C — Cloudflare
-- [ ] **1C.1** Worker rename PR: `oglasino-prod-router` → `oglasino-router-prod` + create `oglasino-router-stage` *(agent task)*
-- [ ] **1C.2** Configure DNS for `stage.oglasino.com` → Vercel *(manual)*
-- [ ] **1C.3** Configure DNS for `api-stage.oglasino.com` → stage droplet *(manual)*
-- [ ] **1C.4** Configure DNS for `api-origin-stage.oglasino.com` (api-origin pattern, details TBD with Igor) *(manual)*
-- [ ] **1C.5** Configure bot/SEO protection on stage subdomains (X-Robots-Tag, robots.txt) *(agent task in router Worker)*
-- [ ] **1C.6** Document all Workers, R2 buckets, DNS records in `cloudflare/*.md`
+- [x] **1C.1** Worker rename PR: `oglasino-prod-router` → `oglasino-router-prod` + create `oglasino-router-stage` *(agent task)*
+- [!] **1C.2** Configure DNS for `stage.oglasino.com` → Vercel *(deferred to Phase 1E — needs stage Vercel URL first)*
+- [x] **1C.3** Configure DNS for `api-stage.oglasino.com` → stage droplet *(manual)*
+- [x] **1C.4** Configure DNS for `api-origin-stage.oglasino.com` (api-origin pattern, details TBD with Igor) *(manual)*
+- [x] **1C.5** Configure bot/SEO protection on stage subdomains (X-Robots-Tag, robots.txt) *(agent task in router Worker)*
+- [x] **1C.6** Document all Workers, R2 buckets, DNS records in `cloudflare/*.md`
+
+**Phase 1C status: substantively complete.** Stage backend reachable
+via api-stage.oglasino.com. Stage frontend (stage.oglasino.com) waits
+on Phase 1E (Vercel stage env). Bot/SEO protection: HTTP header done
+in Worker; robots.txt deferred to Phase 3D in oglasino-web repo.
 
 ### 1D — Apple + Google
 - [ ] **1D.1** Enroll in Apple Developer Program (Individual, $99/year) *(manual — IN PROGRESS)*

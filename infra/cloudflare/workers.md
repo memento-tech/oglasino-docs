@@ -1,17 +1,22 @@
 # Cloudflare Workers
 
-| Worker | Repo | Purpose | Custom Domain | R2 Binding | Branch → Env |
+| Worker | Repo | Branch → Env | Custom Domains | KV Bindings | R2 Bindings |
 |---|---|---|---|---|---|
-| oglasino-router-prod | TBD | Router for prod traffic | oglasino.com | none | main → prod |
-| oglasino-router-stage | TBD | Router for stage traffic | stage.oglasino.com | none | stage → stage |
-| oglasino-images-prod | oglasino-image-worker | Image upload + serve | cdn.oglasino.com | oglasino-images-prod | main → prod |
-| oglasino-images-stage | oglasino-image-worker | Image upload + serve | cdn-stage.oglasino.com | oglasino-images-stage | stage → stage |
-| oglasino-maintenance | oglasino-maintenance | Maintenance page | (toggled on demand) | none | main only |
+| oglasino-router-prod | oglasino-router | main → production | oglasino.com, www.oglasino.com, api.oglasino.com | CONFIG (prod) | none |
+| oglasino-router-stage | oglasino-router | stage → stage | api-stage.oglasino.com, stage.oglasino.com (route claimed but no DNS yet) | CONFIG (stage) | none |
+| oglasino-images-prod | oglasino-image-worker | main → production | cdn.oglasino.com | none | oglasino-images-prod |
+| oglasino-images-stage | oglasino-image-worker | stage → stage | cdn-stage.oglasino.com | none | oglasino-images-stage |
+| oglasino-maintenance | oglasino-maintenance | main only | (toggled on demand via KV flag) | none | none |
 
-## Rename plan
+## Migration history
 
-The existing prod router is currently named `oglasino-prod-router`. It
-will be renamed to `oglasino-router-prod` during Phase 1C.1 of
-[`../master-plan.md`](../master-plan.md), to match the
-`<service>-<env>` convention used everywhere else (images, web, etc.).
-A new `oglasino-router-stage` Worker is created at the same time.
+`oglasino-prod-router` (dashboard-edited Worker) was migrated to
+`oglasino-router-prod` (deployed from oglasino-router repo) on
+2026-05-09. Routes were moved one at a time. Old Worker deleted after
+verification.
+
+## Naming convention
+
+`<purpose>-<env>` everywhere. Env values are `stage` or `prod`. The
+Cloudflare dashboard env name is `production` (full word) but human
+references use `prod`.

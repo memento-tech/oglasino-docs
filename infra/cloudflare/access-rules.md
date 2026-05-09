@@ -1,18 +1,40 @@
-# Cloudflare Access & Bot Rules
+# Cloudflare Access Rules & Bot Protection
 
-## Bot / SEO protection on stage subdomains
+## Stage-specific protection
 
-Stage must not be indexed by search engines or scraped by bots. The
-`oglasino-router-stage` Worker injects:
+### HTTP header noindex
 
-- `X-Robots-Tag: noindex, nofollow` on every response
-- A `/robots.txt` returning `User-agent: *\nDisallow: /`
+The `oglasino-router-stage` Worker adds the following header to all
+responses (both API and frontend, when DNS exists):
 
-This is implemented during Phase 1C.5 of
-[`../master-plan.md`](../master-plan.md).
+```
+X-Robots-Tag: noindex, nofollow, noarchive, nosnippet
+```
 
-## Cloudflare Access policies
+This tells search engines not to index, follow, archive, or snippet
+stage content. Implementation: see `oglasino-router/src/index.ts`,
+the `forwardToOrigin` function, parameterized by `ENVIRONMENT === "stage"`.
 
-None configured yet. If/when added (e.g., to gate stage behind a
-team-only login), document the policy name, the application it
-protects, and the identity provider here.
+### robots.txt
+
+Deferred to Phase 3D — implemented in `oglasino-web` Next.js routing
+based on `NEXT_PUBLIC_ENVIRONMENT === "stage"`. Will serve:
+
+```
+User-agent: *
+Disallow: /
+```
+
+For stage frontend at stage.oglasino.com.
+
+For stage API at api-stage.oglasino.com, robots.txt is unnecessary
+(it's an API, not crawled). The X-Robots-Tag header above suffices.
+
+## Future considerations (not configured today)
+
+- Cloudflare Bot Fight Mode — could be enabled per-zone for additional
+  protection. Not enabled today (free, but adds an extra header
+  inspection layer that may rate-limit legitimate traffic).
+- Cloudflare Access (Zero Trust) — could be added to lock stage
+  behind email-based access. Not needed for v1; stage is publicly
+  accessible by design (search engine indexing prevented as above).

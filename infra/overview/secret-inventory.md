@@ -61,4 +61,6 @@ Whenever a secret's location moves OR its value rotates, update the
 | GHCR_PULL_TOKEN_STAGE_DROPLET | Stored on droplet at /home/igor/.docker/config.json (via `docker login ghcr.io`); password manager | Docker pulls of private GHCR images (e.g., Spring image when Phase 3C publishes) | 2026-05-09 (next: 2027-05-09) | Personal Access Token, scope: read:packages only |
 | OGLASINO_STAGE_DROPLET_SSH | Igor's `~/.ssh/oglasino` (private), droplet's `/home/igor/.ssh/authorized_keys` (public) | SSH access to oglasino-stage droplet | 2026-05-09 | Passphrase-protected, in macOS Keychain. Separate key from CI/CD-deploy key (TBD in Phase 3C). |
 | POSTGRES_PASSWORD_STAGE | Droplet `.env`, Igor's password manager | Postgres in stage Docker stack | 2026-05-09 | Random 32+ chars |
+| CLOUDFLARE_API_TOKEN | GH Secrets (oglasino-router) | router Worker deploy workflow | 2026-05-09 | Cloudflare API token, scopes: Workers Scripts Edit, Workers Routes Edit. Same token format as oglasino-image-worker. |
+| CLOUDFLARE_ACCOUNT_ID | GH Secrets (oglasino-router) | router Worker deploy workflow | 2026-05-09 | Cloudflare account ID. Same convention as oglasino-image-worker. |
 | (more rows added in Phase 2.1) | | | | |

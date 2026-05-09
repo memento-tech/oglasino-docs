@@ -17,13 +17,32 @@
 
 ## Stage
 
-### oglasino-stage (to be provisioned in Phase 1B)
-- **Size:** 1 GB / 1 vCPU (smallest)
-- **Region:** TBD (same as prod for latency consistency)
-- **What runs:** Spring + Postgres + Redis + Elasticsearch (all in Docker Compose)
-- **OS:** Ubuntu LTS
-- **IP:** TBD
+### oglasino-stage
+- **Size:** 2 GB / 1 vCPU / 50 GB SSD ($12/mo)
+- **Region:** Frankfurt 1 (FRA1)
+- **OS:** Ubuntu 24.04 LTS
+- **IP:** 142.93.106.90
+- **Created:** 2026-05-09
+- **What runs:** Spring Boot, Postgres, Redis, Elasticsearch (all in Docker Compose)
+- **SSH:** port 2202, user `igor`, key-based only (no password auth)
+- **Hostname:** oglasino-stage
 
-**Note:** 1 GB is below recommended floors for Spring + Postgres + Redis +
-Elasticsearch combined. Pre-committed upgrade trigger: first time stage
-becomes unusably slow → upgrade to 2 GB ($12/mo more). Don't debug — upgrade.
+**Original size was 1 GB; upgraded to 2 GB on 2026-05-09 after
+Elasticsearch could not start within the 1 GB memory budget. The
+upgrade was a pre-committed escape hatch documented before
+provisioning. No further upgrades anticipated for stage.**
+
+**Memory budget at steady state (data services only, before Spring lands):**
+
+| Component | Used | Cap |
+|---|---|---|
+| Elasticsearch | ~745 MB | 900 MB |
+| Postgres | ~18 MB | 200 MB |
+| Redis | ~13 MB | 80 MB |
+| Spring (when published) | ~450 MB expected | 600 MB |
+| System (kernel, Docker daemon, SSH, fail2ban) | ~280 MB | n/a |
+| **Total expected when fully running** | **~1.5 GB** | of 2 GB |
+
+This leaves ~500 MB headroom, sufficient for the 4-tester / 40-product
+workload of stage. Sustained 80%+ memory pressure or any swap usage
+should trigger an upgrade to 4 GB.

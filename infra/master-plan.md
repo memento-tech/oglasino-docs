@@ -20,12 +20,12 @@ populated when the item completes.
 - [x] **1A.6** Document both projects in `firebase/projects.md`
 
 ### 1B — DigitalOcean stage droplet
-- [ ] **1B.1** Provision 1 GB droplet, Ubuntu LTS, same region as prod *(manual)*
-- [ ] **1B.2** Initial server hardening (SSH keys only, fail2ban, ufw firewall) *(agent task — bash script)*
-- [ ] **1B.3** Install Docker + Docker Compose *(agent task)*
-- [ ] **1B.4** Write `docker-compose.yml` for Spring + Postgres + Redis + ES with resource limits *(agent task)*
-- [ ] **1B.5** Test the compose stack boots within 1 GB RAM *(manual verification)*
-- [ ] **1B.6** Document droplet config in `digitalocean/droplets.md`
+- [x] **1B.1** Provision 1 GB droplet, Ubuntu LTS, same region as prod *(manual)*
+- [x] **1B.2** Initial server hardening (SSH keys only, fail2ban, ufw firewall) *(agent task — bash script)*
+- [x] **1B.3** Install Docker + Docker Compose *(agent task)*
+- [x] **1B.4** Write `docker-compose.yml` for Spring + Postgres + Redis + ES with resource limits *(agent task)*
+- [x] **1B.5** Test the compose stack boots within 1 GB RAM *(manual verification)*
+- [x] **1B.6** Document droplet config in `digitalocean/droplets.md`
 
 ### 1C — Cloudflare
 - [ ] **1C.1** Worker rename PR: `oglasino-prod-router` → `oglasino-router-prod` + create `oglasino-router-stage` *(agent task)*

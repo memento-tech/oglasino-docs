@@ -1,26 +1,26 @@
-# DigitalOcean Databases
+# Databases
 
-## Production — Managed Postgres
+## Stage — Postgres in Docker on droplet
 
-Prod uses DigitalOcean's managed Postgres service. Backups, failover,
-and point-in-time recovery are handled by DO. Specifics (cluster name,
-size, region, connection string location) populated during Phase 1.
+Stage runs Postgres 16 (alpine variant) inside the Docker Compose stack
+on the oglasino-stage droplet. Configuration in
+`oglasino-stage-infra/docker-compose.yml`.
 
-- **Cluster:** TBD
-- **Size:** TBD
-- **Region:** TBD
-- **Backup policy:** managed (default)
-- **Connection details:** stored as a GH Secret on `oglasino-backend`
-  (see [`../overview/secret-inventory.md`](../overview/secret-inventory.md))
+- **Image:** `postgres:16-alpine`
+- **Memory cap:** 200 MB (uses ~18 MB at steady state)
+- **Persistence:** Docker named volume `postgres_data` — survives
+  container restart but lost on `docker compose down -v`
+- **No backups configured** — acceptable for stage. JSON seed data
+  in backend's stage profile re-populates 40 test products on app
+  startup. If real test data needs preservation, set up `pg_dump` cron
+  to a local directory or external storage.
+- **Network:** internal only (`oglasino_internal` Docker network).
+  Not exposed externally. Spring connects via hostname `postgres:5432`.
+- **Credentials:** `POSTGRES_USER`, `POSTGRES_PASSWORD`,
+  `POSTGRES_DB` set in `.env` on droplet (not in git). See
+  `secret-inventory.md`.
 
-## Stage — Postgres in Docker
+## Prod — Managed Postgres (existing)
 
-Stage runs Postgres inside the Docker Compose stack on the stage
-droplet (see [`droplets.md`](droplets.md)). It is **not** a managed
-service.
-
-- **No automated backups by default.** Stage is treated as ephemeral.
-- **Test data preservation:** if QA workflows ever require preserving
-  stage data across restarts, schedule a Phase 5 followup to add a
-  backup cron (`pg_dump` to R2 daily) and document recovery in
-  [`../runbooks/recover-from-droplet-loss.md`](../runbooks/recover-from-droplet-loss.md).
+Already provisioned. Details to be filled in when prod is reviewed
+during cutover.

@@ -16,8 +16,8 @@ populated when the item completes.
 - [x] **1A.2** Create new Firebase project `oglasino-prod` *(manual)*
 - [x] **1A.3** Configure auth providers (email, Google) on both *(manual)*
 - [x] **1A.4** Generate Admin SDK service account JSON for each *(manual + record in secret-inventory.md)*
-- [ ] **1A.5** Generate FCM VAPID key, web push configuration on each *(manual + record)*
-- [ ] **1A.6** Document both projects in `firebase/projects.md`
+- [x] **1A.5** Generate FCM VAPID key, web push configuration on each *(manual + record)*
+- [x] **1A.6** Document both projects in `firebase/projects.md`
 
 ### 1B — DigitalOcean stage droplet
 - [ ] **1B.1** Provision 1 GB droplet, Ubuntu LTS, same region as prod *(manual)*

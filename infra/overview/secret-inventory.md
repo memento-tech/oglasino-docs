@@ -53,4 +53,9 @@ Whenever a secret's location moves OR its value rotates, update the
 | GoogleService-Info.plist (prod) | EAS Secrets | Expo iOS Firebase init | 2026-05-09 | downloaded from oglasino-prod-7e5db iOS app registration |
 | google-services.json (stage) | EAS Secrets | Expo Android Firebase init | 2026-05-09 | downloaded from oglasino-stage-49abb Android app registration |
 | google-services.json (prod) | EAS Secrets | Expo Android Firebase init | 2026-05-09 | downloaded from oglasino-prod-7e5db Android app registration |
+| NEXT_PUBLIC_FIREBASE_VAPID_KEY (stage) | Vercel env (stage), Igor's password manager | Web push registration | 2026-05-09 | Public VAPID key for oglasino-stage-49abb. Public exposure is by design. |
+| NEXT_PUBLIC_FIREBASE_VAPID_KEY (prod) | Vercel env (prod), Igor's password manager | Web push registration | 2026-05-09 | Public VAPID key for oglasino-prod-7e5db. Public exposure is by design. |
+| APNs Authentication Key (.p8) | Igor's password manager only | Uploaded to Firebase Console (both projects, both slots) | 2026-05-09 | Single key for entire Apple Team ID. Sandbox & Production. NEVER store in any repo, env var, or build artifact. |
+| APNs Key ID | Igor's password manager | Reference only — needed for Firebase upload form | 2026-05-09 | 10 alphanumeric chars. Not secret per se but part of the credential context. |
+| Apple Team ID | Igor's password manager | Reference only — needed for Firebase upload form, EAS configuration | n/a | 10 alphanumeric chars. Not secret. Used by EAS for code signing in Phase 3E. |
 | (more rows added in Phase 2.1) | | | | |

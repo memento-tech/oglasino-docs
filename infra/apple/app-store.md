@@ -4,9 +4,29 @@
 
 - **Type:** Individual
 - **Apple ID:** TBD
-- **Enrolled:** [DATE — fill in once approved]
-- **Annual renewal:** [DATE + 1 year]
-- **Status:** ENROLLMENT IN PROGRESS (as of 2026-05-09)
+- **Enrolled:** 2026-05-09
+- **Annual renewal:** 2027-05-09
+- **Status:** ACTIVE (enrolled 2026-05-09)
+
+## APNs Authentication Key
+
+| Property | Value |
+|---|---|
+| Key Name | Oglasino APNs |
+| Key ID | [in password manager] |
+| Team ID | [in password manager] |
+| APNs Environment | Sandbox & Production |
+| Generated | 2026-05-09 |
+| Uploaded to | oglasino-stage-49abb (both slots), oglasino-prod-7e5db (both slots) |
+
+**Lifecycle notes:**
+
+- APNs keys do not expire. Apple allows up to 2 active keys per team.
+- If the key is ever lost or compromised, revoke in Apple Developer
+  console and generate a new one. Re-upload to all four Firebase slots.
+- The first generated key (Key ID redacted) was Production-only and
+  was revoked on 2026-05-09 in favor of the current Sandbox & Production
+  key.
 
 ## Future transfer to Organization
 

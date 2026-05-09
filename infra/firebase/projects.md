@@ -15,6 +15,10 @@
 - **Created:** 2026-05-09
 - **Owner:** Oglasino (oglasino@gmail.com)
 
+#### Push messaging
+- VAPID key: generated 2026-05-09, value in password manager
+- APNs auth key: uploaded to development AND production slots (same .p8)
+
 ### oglasino-prod
 - **Project ID:** oglasino-prod-7e5db
 - **Used by:** prod backend, prod web, prod RN
@@ -22,6 +26,10 @@
 - **Authorized domains:** `localhost`, `oglasino-prod-7e5db.firebaseapp.com`, `oglasino-prod-7e5db.web.app`, `oglasino.com`, `www.oglasino.com`
 - **Created:** 2026-05-09
 - **Owner:** Oglasino (oglasino@gmail.com)
+
+#### Push messaging
+- VAPID key: generated 2026-05-09, value in password manager
+- APNs auth key: uploaded to development AND production slots (same .p8)
 
 ## Local development uses stage Firebase
 

@@ -12,10 +12,10 @@ populated when the item completes.
 ## Phase 1 — Provision stage infrastructure
 
 ### 1A — Firebase
-- [ ] **1A.1** Create new Firebase project `oglasino-stage` *(manual)*
-- [ ] **1A.2** Create new Firebase project `oglasino-prod` *(manual)*
-- [ ] **1A.3** Configure auth providers (email, Google) on both *(manual)*
-- [ ] **1A.4** Generate Admin SDK service account JSON for each *(manual + record in secret-inventory.md)*
+- [x] **1A.1** Create new Firebase project `oglasino-stage` *(manual)*
+- [x] **1A.2** Create new Firebase project `oglasino-prod` *(manual)*
+- [x] **1A.3** Configure auth providers (email, Google) on both *(manual)*
+- [x] **1A.4** Generate Admin SDK service account JSON for each *(manual + record in secret-inventory.md)*
 - [ ] **1A.5** Generate FCM VAPID key, web push configuration on each *(manual + record)*
 - [ ] **1A.6** Document both projects in `firebase/projects.md`
 

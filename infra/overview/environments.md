@@ -36,8 +36,9 @@ TBD — populated during Phase 1.
 TBD — populated during Phase 1.
 
 ### Firebase
-Local dev points at the `oglasino-stage` Firebase project. See
-[`../firebase/projects.md`](../firebase/projects.md).
+Uses oglasino-stage-49abb (intentional for v1 — see
+[`../firebase/projects.md`](../firebase/projects.md) for the if/when
+we need a separate dev project trigger conditions).
 
 ### Domains
 TBD — populated during Phase 1.
@@ -68,7 +69,8 @@ TBD — populated during Phase 1D and Phase 3E.
 TBD — populated during Phase 1C.
 
 ### Firebase
-TBD — populated during Phase 1A.
+Firebase project: oglasino-stage-49abb. See
+[`../firebase/projects.md`](../firebase/projects.md).
 
 ### Domains
 TBD — populated during Phase 1C.
@@ -99,7 +101,8 @@ TBD — populated during Phase 1.
 TBD — populated during Phase 1C.
 
 ### Firebase
-TBD — populated during Phase 1A.
+Firebase project: oglasino-prod-7e5db. See
+[`../firebase/projects.md`](../firebase/projects.md).
 
 ### Domains
 TBD — populated during Phase 1.

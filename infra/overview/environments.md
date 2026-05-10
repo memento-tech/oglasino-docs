@@ -54,7 +54,7 @@ TBD — populated during Phase 1.
 | Database | Postgres 16 in Docker on oglasino-stage droplet | Running |
 | Cache | Redis 7 in Docker on oglasino-stage droplet | Running |
 | Search | Elasticsearch 8.13.4 in Docker on oglasino-stage droplet | Running |
-| Frontend (Web) | Vercel — stage env | Phase 1E pending |
+| Frontend (Web) | Vercel — stage env | Vercel oglasino-web-stage project, deploys via deploy-stage.yml on push to stage branch (workflow created, awaiting first push) |
 | Frontend (Mobile) | EAS profile `preview` | Phase 3E pending |
 | CDN | Cloudflare oglasino-images-stage | Running (since pre-Phase 1) |
 | Router | Cloudflare oglasino-router-stage | Running (Phase 1C) |

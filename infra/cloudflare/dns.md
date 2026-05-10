@@ -14,10 +14,10 @@
 
 | Record | Type | Target | Proxy | Notes |
 |---|---|---|---|---|
-| api-stage.oglasino.com | A | 192.0.2.1 (placeholder) | Proxied | Worker route intercepts before reaching IP; routes through oglasino-router-stage Worker |
+| api-stage.oglasino.com | A | 142.93.106.90 | Proxied | Worker route intercepts before reaching IP; routes through oglasino-router-stage Worker |
 | api-origin-stage.oglasino.com | A | 142.93.106.90 | DNS only | gray cloud — Worker fetches this to reach stage droplet |
 | cdn-stage.oglasino.com | (Worker custom domain) | oglasino-images-stage | Proxied | stage image CDN |
-| stage.oglasino.com | _NOT YET CONFIGURED_ | _TBD_ | _TBD_ | deferred to Phase 1E (needs Vercel stage URL) |
+| stage.oglasino.com | A | 142.93.106.90 | Proxied | routes through oglasino-router-stage Worker, forwards to Vercel oglasino-web-stage |
 
 ## Worker custom domains vs. Worker routes
 
@@ -33,10 +33,15 @@ hostname needs more flexibility than custom domains support.
 
 ## Notes
 
-- The placeholder IP `192.0.2.1` for `api-stage.oglasino.com` is not
-  arbitrary — it's a TEST-NET-1 IP from RFC 5737 reserved for
-  documentation. Cloudflare requires SOME IP for an A record but the
-  Worker route intercepts before traffic reaches it.
+**Why DNS records point at real droplet IPs even when Workers intercept:**
+Cloudflare's behavior is "Worker routes take precedence over DNS for
+matching hostnames." So even though `api-stage.oglasino.com` points
+to 142.93.106.90 in DNS, the actual request never reaches the IP —
+the Worker route claims the request first. The IP serves as a
+"fallback safety" record in case the Worker is ever disabled or fails;
+without a Worker, traffic falls through to the proxied IP-based
+routing. Matches prod's pattern.
+
 - All stage subdomains are proxied (orange cloud) except `api-origin-stage`
   which is gray cloud to allow Worker → droplet direct fetch without
   proxy recursion.

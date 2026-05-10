@@ -63,4 +63,7 @@ Whenever a secret's location moves OR its value rotates, update the
 | POSTGRES_PASSWORD_STAGE | Droplet `.env`, Igor's password manager | Postgres in stage Docker stack | 2026-05-09 | Random 32+ chars |
 | CLOUDFLARE_API_TOKEN | GH Secrets (oglasino-router) | router Worker deploy workflow | 2026-05-09 | Cloudflare API token, scopes: Workers Scripts Edit, Workers Routes Edit. Same token format as oglasino-image-worker. |
 | CLOUDFLARE_ACCOUNT_ID | GH Secrets (oglasino-router) | router Worker deploy workflow | 2026-05-09 | Cloudflare account ID. Same convention as oglasino-image-worker. |
+| VERCEL_PROJECT_ID_STAGE | GH Secrets (oglasino-web) | deploy-stage.yml workflow | 2026-05-09 | Stage Vercel project ID, value from Vercel dashboard → oglasino-web-stage → Settings → General → Project ID |
+| CF_KV_NAMESPACE_ID_STAGE | GH Secrets (oglasino-web) | deploy-stage.yml workflow (maintenance KV writes) | 2026-05-09 | Same value as in oglasino-router/wrangler.toml [[env.stage.kv_namespaces]] id field |
+| NEXT_PUBLIC_* (stage) | Vercel env (oglasino-web-stage project, Production scope) | Next.js stage runtime | 2026-05-09 | All stage-environment Firebase config, API URL, CDN URL, and other web client env vars. Mirrors prod project's variables with stage-specific values. |
 | (more rows added in Phase 2.1) | | | | |

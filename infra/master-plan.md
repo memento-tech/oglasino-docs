@@ -29,7 +29,7 @@ populated when the item completes.
 
 ### 1C — Cloudflare
 - [x] **1C.1** Worker rename PR: `oglasino-prod-router` → `oglasino-router-prod` + create `oglasino-router-stage` *(agent task)*
-- [!] **1C.2** Configure DNS for `stage.oglasino.com` → Vercel *(deferred to Phase 1E — needs stage Vercel URL first)*
+- [x] **1C.2** Configure DNS for `stage.oglasino.com` → Vercel *(manual)*
 - [x] **1C.3** Configure DNS for `api-stage.oglasino.com` → stage droplet *(manual)*
 - [x] **1C.4** Configure DNS for `api-origin-stage.oglasino.com` (api-origin pattern, details TBD with Igor) *(manual)*
 - [x] **1C.5** Configure bot/SEO protection on stage subdomains (X-Robots-Tag, robots.txt) *(agent task in router Worker)*
@@ -48,9 +48,10 @@ in Worker; robots.txt deferred to Phase 3D in oglasino-web repo.
 - [ ] **1D.5** Document mobile app distribution in `google-play/*.md` and `apple/app-store.md`
 
 ### 1E — Vercel stage
-- [ ] **1E.1** Add stage environment to `oglasino-web` Vercel project, point at `stage` branch *(manual)*
-- [ ] **1E.2** Configure stage env vars (populate in Phase 2) *(manual)*
-- [ ] **1E.3** Document in `vercel/deployments.md`
+- [x] **1E.1** Add stage environment to `oglasino-web` Vercel project, point at `stage` branch *(manual)*
+- [x] **1E.2** Configure stage env vars (populate in Phase 2) *(manual)*
+- [x] **1E.3** Document in `vercel/deployments.md`
+- [~] **1E.4** Add deploy-stage.yml workflow + vercel.json update *(workflow file written; awaiting first push to stage branch to verify end-to-end)*
 
 ## Phase 2 — Secret rotation + inventory
 

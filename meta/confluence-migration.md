@@ -16,13 +16,15 @@ Until a trigger fires, this repo is the system of record.
 
 Each top-level directory becomes a Confluence **space**:
 
-| Directory | Confluence space |
-|---|---|
-| `infra/` | Infrastructure |
-| `product/` | Product |
-| `design/` | Design |
-| `business/` | Business |
-| `meta/` | (folded into a "Documentation" space or merged into Infrastructure) |
+| Directory | What lives here | Confluence space |
+|---|---|---|
+| [`infra/`](../infra/) | Infrastructure — DigitalOcean, Cloudflare, Firebase, Vercel, Apple, Google Play, Expo, GitHub, Namecheap, runbooks. Start at [`infra/master-plan.md`](../infra/master-plan.md). | Infrastructure |
+| [`features/`](../features/) | Feature specs (one `.md` per feature). | Features |
+| [`sessions/`](../sessions/) | Archived engineer session summaries. | Sessions |
+| [`future/`](../future/) | Deferred / parked work, kept for reference. | Future |
+| [`design/`](../design/) | QA topic pages (one `.md` per topic). | Design |
+| [`legal/`](../legal/) | Pre-lawyer drafts of Privacy Policy, Terms, etc. | Legal |
+| [`meta/`](../meta/) | Documentation about the documentation — conventions, migration plan. | (folded into a "Documentation" space or merged into Infrastructure) |
 
 Subdirectories become parent pages with child pages underneath.
 Example: `infra/cloudflare/workers.md` → page **Workers** under parent

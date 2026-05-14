@@ -1,18 +1,28 @@
 # Oglasino Docs
 
-Single source of truth for all Oglasino documentation — infrastructure
-today, product/design/business material as it accumulates. Eventually
-migrates to Confluence (see [`meta/confluence-migration.md`](meta/confluence-migration.md)).
+Single source of truth for all Oglasino documentation — infrastructure,
+feature specs, design/QA topics, legal drafts, and session archives.
+Eventually migrates to Confluence (see [`meta/confluence-migration.md`](meta/confluence-migration.md)).
 
 ## Top-level structure
 
 | Directory | What lives here |
 |---|---|
 | [`infra/`](infra/) | Infrastructure — DigitalOcean, Cloudflare, Firebase, Vercel, Apple, Google Play, Expo, GitHub, Namecheap, runbooks. Start at [`infra/master-plan.md`](infra/master-plan.md). |
-| [`product/`](product/) | Product specs, feature briefs, roadmap notes. |
-| [`design/`](design/) | Design decisions, UX writing, visual conventions. |
-| [`business/`](business/) | Business documents — entity formation, contracts, finance. |
+| [`features/`](features/) | Feature specs (one `.md` per feature). |
+| [`sessions/`](sessions/) | Archived engineer session summaries. |
+| [`future/`](future/) | Deferred / parked work, kept for reference. |
+| [`design/`](design/) | QA topic pages (one `.md` per topic). |
+| [`legal/`](legal/) | Pre-lawyer drafts of Privacy Policy, Terms, etc. |
 | [`meta/`](meta/) | Documentation about the documentation — conventions, migration plan. |
+
+## Root-level files
+
+| File | What it is |
+|---|---|
+| [`state.md`](state.md) | Single source of truth for where the project is right now. |
+| [`decisions.md`](decisions.md) | Append-only log of decisions. |
+| [`issues.md`](issues.md) | Append-only log of out-of-scope findings flagged by engineer sessions. |
 
 ## Editing conventions
 

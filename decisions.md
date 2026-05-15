@@ -6,6 +6,106 @@ Format: each decision has a date, a one-line summary, the reasoning, and the alt
 
 ---
 
+## 2026-05-14 — Connection-pool exhaustion incident: warmup-gated readiness + auth-cache TTL
+
+**Context.** Production-adjacent (stage) logs showed HikariCP connection-pool exhaustion under concurrent load — ~20 simultaneous requests draining an 8-connection pool, cascading into server-wide 500s. Investigation traced the mechanism: `BaseSiteFilter` runs on every request and calls a `@Cacheable + @Transactional` method (`DefaultBaseSiteService.getAllBaseSites`); on a cold-cache window, concurrent misses each open a JPA transaction and grab a connection, and Spring's `CacheInterceptor` has no per-key locking to deduplicate them. `/api/public/translations` appeared in the failure logs as a victim of upstream filter-chain contention, not a culprit. The incident surfaced on stage (pool size 8); the same mechanism is latent on prod (pool size 18).
+
+**Decisions.**
+
+1. **Cache warmup now gates readiness.** `CacheWarmupService` publishes `AvailabilityChangeEvent(ReadinessState.ACCEPTING_TRAFFIC)` only after the warmup pass completes. The app starts in `REFUSING_TRAFFIC`. This closes the post-deploy cold-cache window — traffic is not routed until the global caches are warm. Chosen over moving warmup into an earlier lifecycle phase, because that would race ahead of `CatalogManager` seeding the `Catalog` rows that `getAllBaseSites` dereferences. The warmup pass flips readiness even if an individual cache fails to warm — the gate is "warmup has run," not "warmup is perfect" — so a transient single-cache failure cannot permanently brick readiness.
+
+2. **The docker-compose healthcheck targets readiness, not liveness.** `infra/docker-compose.yml` and `infra/docker-compose-stage.yml` healthchecks now hit `/actuator/health/readiness` instead of `/actuator/health/liveness`. Liveness reports `CORRECT` early in boot, before warmup; without this change the warmup-gating in decision 1 would be operationally inert because nothing consulted the readiness signal. `start_period` was raised from 90s to 120s (≈2× the confirmed ~60s typical boot+warmup) so the stricter check does not cause a boot loop. If a deploy ever boot-loops on this healthcheck, the response is to lengthen `start_period` further, not to revert — the gate is the load-bearing fix.
+
+3. **`redisUserAuth` TTL raised from 1 minute to 30 minutes.** An investigation traced every production code path that mutates an auth-relevant field (`userRole`, `subscriptionType`, `subscriptionActive`, `disabled`) and confirmed every one routes through `DefaultUserService.saveUser`, whose `@CacheEvict` is the real invalidation mechanism. The 1-minute TTL was a pure safety net with nothing relying on it. 30 minutes matches `redisUserInfo`'s TTL. The eviction `@CacheEvict` — not the TTL — remains the correctness mechanism; the TTL is a backstop.
+
+**Constraint this establishes.** Any future code path that mutates an auth-relevant field on a `User` row must route through `saveUser` (or carry its own `@CacheEvict` for `redisUserAuth`). With a 30-minute TTL, an unevicted change is stale for up to 30 minutes instead of 1. In particular, the planned user-deletion feature must evict `redisUserAuth` for the deleted user's `firebaseUid`.
+
+**Scoped out as feature-sized work (see `features/`):** per-key single-flight deduplication of concurrent cache misses; removing `@Transactional` from `getAllBaseSites`; the `redisBaseSites` 24h-TTL cold-cache trigger (the warmup gate closes the *post-deploy* window, not the daily-TTL-expiry one); `RateLimitFilter` categorisation of public reference-data endpoints; and the four `@Component` filters having no explicit `@Order`. These were deliberately not fixed in the bug-fixer chat because the honest fix is structural.
+
+---
+
+## 2026-05-14 — Redis caching & filter control-flow fixes (bug-fixer chat)
+
+**Context.** A bug-fixer chat working the connection-pool incident surfaced several adjacent, independently-real bugs in the Redis caching layer and the request-filter chain. Each was investigated and fixed in the same chat.
+
+**Decisions.**
+
+1. **`DefaultBaseCurrencyService` self-invocation bypass fixed.** `convertToBaseCurrency()` and `updateBaseCurrency()` called `this.getBaseCurrency()` directly, bypassing the Spring proxy and the `@Cacheable` annotation — so a price-range-filtered product search hit the DB twice for base-currency data that should have been cached. Fixed via `@Lazy` self-injection (`self.getBaseCurrency()`). This is the first `@Lazy` self-reference in the codebase; it sets the precedent for proxy-respecting self-calls.
+
+2. **`DefaultTranslationService.updateTranslation` made explicitly transactional.** The method mutated a `Translation` entity but had no `@Transactional`, persisting only as a side effect of OSIV plus a later call's transaction. It now carries its own `@Transactional` — if OSIV is ever disabled, admin translation edits would otherwise have silently stopped persisting.
+
+3. **`CurrentLanguageFilter` control flow corrected, and `X-Lang` handling made explicit.** The filter's `try` block wrapped `filterChain.doFilter(...)`, silently swallowing *all* downstream exceptions and turning genuine 500s into empty 200s. `doFilter` was moved outside the `try` — downstream exceptions now propagate on every route. Additionally: a missing or unresolvable `X-Lang` header now returns **400 `LANG_MISSING_OR_INVALID`** on language-dependent public routes, while a confirmed allowlist of language-independent public routes (`/api/public/baseSite/*`, `/api/public/config`, `/api/public/translations`, `/api/public/health/check`, `/api/public/maintenance/*`, `/api/public/verify-recaptcha`, `/api/public/app/version/*`) continues with language unset. The 400 rule applies only to `/api/public/*` — secure and auth routes were not inventoried for language-dependence and pass through unchanged. Missing and malformed `X-Lang` are treated identically.
+
+4. **Translations Redis cache confirmed to have — correctly — no TTL.** An investigation expecting to find and remove a harmful TTL on the translations cache found there was never a TTL to remove. Every DB-write path to `oglasino_translation` (boot SQL seed; admin `updateTranslation`) triggers a full Redis reindex, so the cache cannot go stale. No change made; recorded so the absence of a TTL is understood to be deliberate and correct, not an oversight.
+
+**Routed out, not fixed here.** `ProductErrorCode` contains cross-cutting error codes that do not belong in a product-scoped enum (`LANG_MISSING_OR_INVALID`, added by decision 3, followed an existing bad precedent). Fixing only the new code would leave the enum inconsistently cleaned; the honest fix is a refactor moving all cross-cutting codes to a proper enum, which is beyond a bug-fixer chat's mandate. Logged to `issues.md` as a high-severity entry — the one deliberate, documented exception to this chat's "nothing parks to issues.md" rule, made because the real fix is feature-sized.
+
+---
+
+## 2026-05-14 — QA Preparation: imageKey rename correction (supersedes earlier entry)
+
+The earlier entry today — "QA Preparation: QaImage field renamed url → imageKey" — was wrong on two points. It claimed the rename was "no code rework" and that `features/qa-preparation.md` had been "updated to match." Both were false. The renderer (`page.tsx`) references the field directly, so renaming the type alone fails typecheck; the Docs/QA pilot session caught this when it attempted the rename and `tsc` rejected it. And the spec was never edited — it still showed `url?: string` with the old comment.
+
+The actual change: a thin web brief renames `QaImage.url` to `imageKey` across three files — `topics.ts` (the type), `page.tsx` (the renderer reference plus the local variable `renderableImageUrls` → `renderableImageKeys`), and `features/qa-preparation.md` (the schema definition and the `images` note). No content values change — no topic entry had set the field yet.
+
+This entry supersedes the earlier one. The earlier entry stays in the log (append-only), but its premise and its "spec updated" claim are void — this entry is the accurate record.
+
+**Reasoning:** the field holds an R2 object key, not a URL — `ProductImageCarousel` consumes keys. A field named `url` that wants a key misleads every content author who fills it. The original error was Mastermind's: the decision was drafted assuming the field was unreferenced, without that being verified. Logged plainly so the correction is on the record and the "verify before claiming no-rework" lesson is visible.
+
+**Alternatives considered:** deleting the earlier entry (rejected — decisions.md is append-only; a wrong entry gets superseded, not erased). Leaving the rename for a future regular web brief (rejected — no regular web brief was queued; the field would stay misnamed indefinitely and every image entry would inherit it).
+
+---
+
+## 2026-05-14 — QA Preparation: imageKey rename correction (supersedes earlier entry)
+
+The earlier entry today — "QA Preparation: QaImage field renamed url → imageKey" — was wrong on two points. It claimed the rename was "no code rework" and that `features/qa-preparation.md` had been "updated to match." Both were false. The renderer (`page.tsx`) references the field directly, so renaming the type alone fails typecheck; the Docs/QA pilot session caught this when it attempted the rename and `tsc` rejected it. And the spec was never edited — it still showed `url?: string` with the old comment.
+
+The actual change: a thin web brief renames `QaImage.url` to `imageKey` across three files — `topics.ts` (the type), `page.tsx` (the renderer reference plus the local variable `renderableImageUrls` → `renderableImageKeys`), and `features/qa-preparation.md` (the schema definition and the `images` note). No content values change — no topic entry had set the field yet.
+
+This entry supersedes the earlier one. The earlier entry stays in the log (append-only), but its premise and its "spec updated" claim are void — this entry is the accurate record.
+
+**Reasoning:** the field holds an R2 object key, not a URL — `ProductImageCarousel` consumes keys. A field named `url` that wants a key misleads every content author who fills it. The original error was Mastermind's: the decision was drafted assuming the field was unreferenced, without that being verified. Logged plainly so the correction is on the record and the "verify before claiming no-rework" lesson is visible.
+
+**Alternatives considered:** deleting the earlier entry (rejected — decisions.md is append-only; a wrong entry gets superseded, not erased). Leaving the rename for a future regular web brief (rejected — no regular web brief was queued; the field would stay misnamed indefinitely and every image entry would inherit it).
+
+---
+
+## 2026-05-14 — QA Preparation: QaImage field renamed url → imageKey
+
+The `QaImage` type in the QA Preparation schema had a field `url`, documented as "Cloudflare URL — filled in after the image is uploaded." The web rebuild session surfaced that `ProductImageCarousel` — the component the QA page reuses to render images — does not consume URLs. It consumes R2 object keys, which it runs through `publicImageUrl(key, 'hero')` to build the final CDN URL. A full URL placed in that field would produce a broken nested URL at render time.
+
+The field is renamed `url` → `imageKey`. The doc comment is corrected to "R2 object key, not a URL." `features/qa-preparation.md` is updated to match: the `QaImage` type definition and the `images` note in the Schema section.
+
+No code rework — the rebuild session shipped before any topic had an image entry, and the two example topics have an `images` entry with `name`+`description` and no key. The example in `topics.ts` needs the field name corrected; that rides along with the next web touch or the first docs brief that adds an image.
+
+**Reasoning:** a field named `url` that requires a key is a trap for content authors. Caught before the Docs/QA phase, so the cost is one rename plus a spec edit. Caught after, it would be a find-and-replace across every authored topic with an image.
+
+**Alternatives considered:** make `ProductImageCarousel` URL-aware (rejected — changes a shared component the product surface depends on, out of this feature's scope, and only needed because the field was misnamed). Keep `url` and instruct authors to paste a key anyway (rejected — the field name should tell the truth about what goes in it).
+
+---
+
+## 2026-05-14 — QA Preparation: schema and structure decisions
+
+The QA Preparation feature builds one in-app QA reference page at `/[locale]/design` in `oglasino-web`, content-driven, covering every in-scope page, feature, and flow. The existing `/design` page is the structural template — its layout and data model are kept, its example content is discarded and rebuilt. Five decisions settled after the route inventory + structure audit (`oglasino-web` audit, 2026-05-14):
+
+**Content stays TypeScript, not JSON.** The existing `app/[locale]/design/topics.ts` exports a `QaTopic` type and a `qaTopics: QaTopic[]` const, statically imported and bundled. This is kept. The `QaTopic` type serves as the content schema — Docs/QA authors entries against it with typecheck enforcement. Rejected: JSON file + runtime load — more moving parts, loses type enforcement, and the hot-swap benefit is near-zero since Docs/QA runs with a TS toolchain.
+
+**No prod-exclusion mechanism.** The page can be visible in production. Its content only describes behavior already reachable through the portal — there is nothing sensitive to gate. The audit's "no guard exists" finding is acknowledged and accepted, not treated as a gap.
+
+**`type` field added to the schema.** Every topic is one of `'page' | 'feature' | 'flow' | 'other'`. The current schema is a single flat record with no type discriminator; the feature explicitly deals in four kinds of topic. The field makes each entry self-describing and lets the header group or filter by type later.
+
+**Model A — pages and features are both top-level topics.** A page topic and a feature topic are peers in the flat `qaTopics` list, not nested. A page that has main features references them as separate topics; some pages have no features and reference nothing. Rejected: Model B (nesting `features: QaFeature[]` inside a page topic) — requires new schema, new rendering, and new header logic; the audited page was built flat and adopting nesting is real web work for a gain that Model A plus the `type` field already delivers.
+
+**Cross-references between topics.** A page topic links to its feature/flow topics so a QA tester clicks and scrolls to the sibling topic on the same page. The spec defines the mechanism — current direction is a dedicated `relatedTopics` field holding topic `id`s, separate from `relatedLinks` (external URLs) — to be finalized in `features/qa-preparation.md`.
+
+**Branch:** `feature/qa-preparation`, branched off `dev`.
+
+**Reasoning:** the feature is mostly docs work with a thin web slice. Keeping the existing structure and making the smallest schema additions that serve the four-topic-type model keeps the web work minimal and front-loads the effort onto content authoring, which is where it belongs. All five decisions bias toward the audited reality over a rebuild.
+
+**Alternatives considered:** captured per-decision above.
+
+---
+
 ## 2026-05-14 — Conventions Part 4 corrected: backend is Maven, not Gradle
 
 `meta/conventions.md` Part 4 (Cleanliness) listed the backend formatter and test commands as `./gradlew spotlessCheck` and `./gradlew test`. The backend repo is Maven. Engineers have been running `mvn spotless:check` and `mvn test` all along — the convention was wrong and the engineers' actual practice was right. Part 4's backend line is corrected to the Maven commands.
@@ -28,7 +128,7 @@ Two additions to `meta/conventions.md`.
 
 Part 1 gains an `### Images` subsection. Docs and any agent referencing images write the image reference as if the file exists, name it kebab-case and descriptive (`product-creation-step-2.png`, not `screenshot1.png`), and add an HTML comment above the reference describing what the image should show — scaled to image complexity. Images live in an `assets/` folder next to the referencing doc. Igor supplies the actual files after the doc is written.
 
-Part 5's session-file rule changes. Previously every engineer wrote `.agent/last-session.md`, overwritten each session — so all session history except the latest was lost. Now the engineer writes the summary to `.agent/yyyy-mm-dd-<repo>-<slug>-<n>.md` (a permanent, uniquely-named record) and *also* to `.agent/last-session.md` (an exact copy, kept so Igor and existing briefs have a predictable path to the latest). `<n>` is sequential per `(repo, slug)` pair, not per day; the engineer counts existing `*-<slug>-*.md` files in its own `.agent/` folder and adds one. Per-repo counting is necessary because an engineer cannot see another repo's `.agent/` folder. The rule applies going forward; pre-rule `last-session.md` files are not backfilled because overwritten content cannot be recovered.
+Part 5's session-file rule changes. Previously every engineer wrote `.agent/last-session.md`, overwritten each session — so all session history except the latest was lost. Now the engineer writes the summary to `.agent/yyyy-mm-dd-<repo>-<slug>-<n>.md` (a permanent, uniquely-named record) and _also_ to `.agent/last-session.md` (an exact copy, kept so Igor and existing briefs have a predictable path to the latest). `<n>` is sequential per `(repo, slug)` pair, not per day; the engineer counts existing `*-<slug>-*.md` files in its own `.agent/` folder and adds one. Per-repo counting is necessary because an engineer cannot see another repo's `.agent/` folder. The rule applies going forward; pre-rule `last-session.md` files are not backfilled because overwritten content cannot be recovered.
 
 **Reasoning:** the image convention lets docs be written before screenshots exist, without placeholder cruft, and keeps the guidance for each missing file attached to the spot it's needed. The session-naming change fixes real data loss — every engineer session before this rule destroyed the previous session's summary. Numbered permanent files give the feature a full session history; the `last-session.md` copy preserves backward compatibility with every brief and habit that already points at that path.
 

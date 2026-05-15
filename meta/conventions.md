@@ -39,9 +39,11 @@ Screenshots and other images are referenced as if the file already exists, even 
 Example:
 
 ​```markdown
+
 <!-- Screenshot: the create-product wizard on step 2, with the name and
      description fields filled and a validation error showing under the
      name field. Error state must be visible. -->
+
 ![Product creation wizard, step 2 with validation error](assets/product-creation-step-2.png)
 ​```
 

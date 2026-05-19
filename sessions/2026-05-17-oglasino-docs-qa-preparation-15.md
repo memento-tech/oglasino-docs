@@ -1,0 +1,64 @@
+# Session summary
+
+**Repo:** oglasino-docs
+**Branch:** feature/qa-preparation
+**Date:** 2026-05-17
+**Task:** QA Preparation — content simplification sweep, batch 2: simplify `messages-page`, `user-page`, `notifications-page`, `favorites-page` in `oglasino-web/app/[locale]/design/topics.ts` for a non-developer QA reader; add HTML markdown comments above every `images[]` entry that lacks one.
+
+## Implemented
+
+- **messages-page** (entry at the top of the file): overview restructured (tester-first, "Firestore onSnapshot subscriptions," "protected portal route group," and "ChatsInit" removed; live header-badge framed in plain words). `optionsControls` lightly cleaned (`unreadCount > 0`, `Undo2`, `activeChatId`, `tempReceiver`, `VIEW_MESSAGE_IMAGES_DIALOG`, `image/*` MIME, `yyyy-mm-dd` all replaced with on-screen language; button/menu labels Profile / Delete / Report / Block / Unblock / Send / Cancel preserved). `whatToExpect` aggressively cut (Firestore subscription / Zustand / `calc(100dvh - 120px)` / R2 / `user:<id>` tag language gone, behavior preserved in plain words). `pitfalls` lightly cleaned (the two kept pitfalls — mark-as-seen on snapshot, delete is unilateral — rewritten in plain words; `userchats subcollection` and `snapshot fires` engineer language replaced). `qaChecklist` restructured + cut (SessionGuard mention dropped; "stale view-token" replaced with plain wording; the "optimistic-id collisions" devtools-only check cut; `activeChatId` mention dropped from the mobile-pane check; `initial.product.message` engineer reference rewritten as "an 'interested in <product>' line"). Seven HTML markdown comments added above each `images[]` entry, scaled to the screenshot. **Factual-accuracy flag in "For Mastermind":** the `optionsControls` "Report menu item — placeholder with no handler wired" bullet describes pre-fix behavior; the Report dropdown was wired up on 2026-05-16 (`oglasino-web-messages-report-wiring-1`). Per the brief's "preserve factual accuracy / flag don't silently rewrite" rule, the bullet was preserved verbatim and is flagged for follow-up.
+- **user-page**: overview restructured (UserDetails/ReviewsList component names dropped; sidebar + grid + carousel layout led by what's on screen). `optionsControls` restructured + cut (`UserDetails`, `UserPlus`, `UserMinus`, `ShieldCheck`, `ShieldX`, `LOGIN_OPTIONS_DIALOG`, `INFO_DIALOG`, `REPORT_DIALOG`, `isOnUserPage=true`, `PortalProductCard`, `globalCookie portalCardSize`, `requestIdleCallback` all removed; dialog ids replaced with "the login dialog opens," "the Report dialog opens," "a dialog opens with an Unblock button"). `howToUse` lightly cleaned (toast CTA wording replaced with the on-screen "see follows" link). `whatToExpect` aggressively cut ("server-rendered," "public user endpoint," "cached for 5 minutes (tagged user:<id>, purged via revalidateTag)," `iamActive === true`, `requestIdleCallback`, `React transition`, `window.location.href` all gone; **the hydration-flash bullet was cut entirely** per Igor's confirmation at Stop 1 — the underlying `iamActive` flash defect was fixed 2026-05-16 in `oglasino-web-hydration-flashes-1`, so the bullet was factually stale). `pitfalls` restructured ("HTTP 200," `getUserForId logs and returns null`, `iamActive === true`, `ownerId filter` engineer references all dropped; tester-visible content preserved). `qaChecklist` light + cut (all DIALOG_ID references replaced with what the tester sees; `iamActive=true` mention dropped; every-button verification preserved). Six HTML markdown comments added above each `images[]` entry.
+- **notifications-page**: overview restructured (`notifications/<firebaseUid>/userNotifications Firestore collection`, "page size 10," `categoryId` all gone; lead with colored cards + bell badge). `optionsControls` restructured (the `categoryId` enum constants `MESSAGE / SAVED_PRODUCT / NAVIGATION / PRODUCT_EXPIRATION / PRODUCT_EXPIRED` replaced with on-screen labels Message / Saved-product / Generic-navigation / Product-expiration / Product-expired; `data.productId via getDashboardNormalizedProductUrl`, `data.navigate`, `startAfter(lastDoc) cursor` all dropped). `whatToExpect` aggressively cut (`markNotificationsAsSeen`, `AuthNotificationButton`, `notificationManager`, `seen: true in a batch`, `startAfter cursor` all replaced with plain language; push-permission-off in-app-toast behavior preserved in plain words). `pitfalls` restructured (the three pitfalls rewritten without engineer-leaning sentences while preserving each surprise; the SOFT-cap-of-10 phrasing tightened). `qaChecklist` light + cut (SessionGuard dropped; `categoryId` constants replaced with on-screen labels; the type→border-color mapping check preserved). Two HTML markdown comments added above each `images[]` entry.
+- **favorites-page**: overview restructured (`PortalProductCard`, `ExtraProductsComponent`, `Frown icon` component-name dropped — but the on-screen Frown icon kept; "client-side fetched after mount" replaced with what the tester sees). `optionsControls` light + cut (`ProductList`, `PortalProductCard`, `isLarge: true`, `FavoriteButton`, `favoriteIds`, `recently.viewed.title`, `similar.products`, `applyRandom: true`, `requestIdleCallback` all replaced with plain words). `whatToExpect` aggressively cut (`useEffect on mount via getFavorites({ page: 0, perPage: 20 })`, `LoadingOverlay`, `favoriteIds store`, `ProductList's /favorites-aware effect`, `ExtraProductsComponent`, `globalCookie portalCardSize`, `isLarge=true grid` all gone; hydrating-store edge case kept in plain words). `pitfalls` lightly cleaned (the "(Same pattern flagged for the home/catalog product calls in issues.md.)" parenthetical removed — tester doesn't read issues.md; the underlying pitfall content preserved). `qaChecklist` light + cut (SessionGuard dropped; `excludeIds` replaced with plain words). Two HTML markdown comments added above each `images[]` entry.
+
+Editorial plan per topic was proposed at Stop 1 and confirmed by Igor before Stop 2 application. The `user-page` hydration-flash bullet was explicitly flagged at Stop 1 and Igor confirmed "cut the bullet."
+
+## Files touched
+
+- `oglasino-web/app/[locale]/design/topics.ts` (four in-place entry replacements; 13 prior entries untouched; net line count change small — image-comment retrofit adds 17 lines across the four topics, prose cuts trim roughly the same back).
+
+## Tests
+
+- Ran: `npx tsc --noEmit` from `oglasino-web/`
+- Result: exit 0 — tsc clean
+- New tests added: none (no schema or runtime change)
+
+## Cleanup performed
+
+- None needed in `oglasino-docs/` — this session writes only to `oglasino-web/app/[locale]/design/topics.ts` under the Docs/QA cross-repo write authority for QA Preparation topic authoring (conventions Part 3). No dead links, stale references, duplicate content, or superseded docs touched in `oglasino-docs/` this session.
+
+## Obsoleted by this session
+
+- Nothing in `oglasino-docs/`. The four simplified entries replace their predecessors in place; no other doc, spec, or topic referenced the prior wording of any of the four entries (the spec at `features/qa-preparation.md` does not quote topic body content). The brief's reference example for "voice" (batch 1) was already in effect; this session continues the same voice.
+
+## Conventions check
+
+- Part 1 (documentation style — images): confirmed. Image-comment retrofit added a single `// <!-- Screenshot: … -->` comment above each `images[]` entry per the 2026-05-14 convention addition, scaled to the image (one to three lines). No `name` / `description` / `imageKey` value was touched on any image entry, on any of the four topics.
+- Part 3 (cross-repo writes): confirmed. The cross-repo write to `oglasino-web/app/[locale]/design/topics.ts` is the established QA Preparation authoring exception (precedent: every prior qa-preparation session 1–14).
+- Part 4 (cleanliness): confirmed.
+- Part 4a (simplicity): confirmed. No new abstractions, no new configuration, no defensive code added. Topic prose was simplified, not expanded.
+- Part 4b (adjacent observations): see "For Mastermind." Two factual-accuracy items flagged.
+- Part 5 (session summary template): this file conforms; written to both `.agent/2026-05-17-oglasino-docs-qa-preparation-15.md` and `.agent/last-session.md`.
+- Part 6 (translations): N/A — no translation strings added or removed.
+- Part 11 (trust boundaries): N/A — no trust-boundary content in these four topics.
+
+## Config-file impact
+
+- conventions.md: no change
+- decisions.md: no change
+- state.md: no change
+- issues.md: no change (this session does not write to `issues.md` per the brief's "one file" rule; one observation routed to "For Mastermind" below)
+
+## Known gaps / TODOs
+
+- Three remaining batches of the simplification sweep (batches 3–5) are out of scope here. Batch 2 continues the voice established in batch 1.
+- The factual-accuracy flag on `messages-page` `optionsControls` (the Report bullet) is unresolved — see "For Mastermind." Igor's call whether to cut, rewrite, or leave.
+- Carry-over final-brief items unchanged this session: the `home-page` `optionsControls` "top-level only" clarity fix (batch 1 territory), the catalog-slug `issues.md` line-number backfill on `category-navigation`'s pitfall, and the still-not-promoted `[[Known issue]]` cross-references on entries whose `issues.md` rows are real (precedent set on `privacy-page`, `terms-page`, `global-header-search`, `category-navigation`).
+
+## For Mastermind
+
+- **Factual-accuracy flag (messages-page).** The `optionsControls` bullet "Report menu item — placeholder with no handler wired." was preserved verbatim during this simplification pass. This bullet describes pre-fix behavior — the Report dropdown was wired to open `REPORT_DIALOG` on 2026-05-16 in `oglasino-web-messages-report-wiring-1` (per `issues.md` entry "2026-05-14 — Messages 'Report' dropdown item is inert", now `fixed`). The brief instructs me to flag wrong sentences rather than silently rewrite. Three options for follow-up: (a) cut the bullet entirely (cleanest — symmetric with the `user-page` hydration-flash bullet that was cut this session), (b) rewrite the bullet to describe the new wired behavior ("Report menu item — opens the Report dialog, same as the Report button on a user's profile or product page"), or (c) leave it as the user-facing pitfall it now effectively is (least useful for QA). My recommendation is (b): rewrite to describe what the dropdown now does, since the Report behavior is real and QA-checkable. The session 14 product-page voice for similar Report references would be a useful match.
+- **`user-page` hydration-flash bullet cut (factual cleanup).** The `whatToExpect` bullet `'iamActive is determined client-side from the auth store (user.id === userDetails.id) on first render. While the auth store is still hydrating, the action buttons may render briefly before disappearing for a signed-in owner.'` was cut at Stop 2 per Igor's explicit confirmation at Stop 1. Reason: the underlying defect was fixed 2026-05-16 in `oglasino-web-hydration-flashes-1` (the `UserDetails` hydration flash, now gated by `useAuthResolved`). No new bullet was added in its place — the post-fix behavior (gated rendering, no flash) is the default user expectation and doesn't merit a `whatToExpect` bullet of its own.
+- **No new `issues.md` candidates surfaced during this session's reading.** The bugs that match this batch's topics are already in `issues.md` and have been triaged: the messages chat-list-capped-at-15 entry (medium, open), the messages silent text-only send failure (medium, open), the messages "Report" dropdown was inert (fixed 2026-05-16), the `UserDetails` hydration flash (fixed 2026-05-16), the favorites "recently viewed" carousel is misnamed (low, open), the favorites brittle positional narrowing (fixed 2026-05-16), the favorites/home/catalog backend-errors-swallowed pattern (medium, open). None of these are new findings from this session; all are preserved in the topics as plain-language pitfalls without `[[Known issue]]` cross-reference promotion (promotion is final-brief work per Igor's call).
+- **One forward observation, low priority.** Across batch 1 and batch 2 (seven topics simplified across two sessions), the consistent edits are: lead with what the tester sees; cut every component / dialog / hook / store / cache identifier the tester can't see in the UI; replace "the snapshot fires," "the subscription updates," "the effect refetches" with plain "updates in real time," "refreshes," "loads"; convert "HTTP status," "JSON response," "fetch error" into "the page shows X." If you'd like, I can capture this as a one-paragraph "voice note" in `features/qa-preparation.md` (under the Authoring section) so batches 3–5 inherit it without needing the batch-1 reference in the brief each time. Let me know in a future session.

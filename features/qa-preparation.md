@@ -139,7 +139,7 @@ The redesigned page keeps the audited page's UI shape. Changes are in what it re
 - **Content cards:** the content maps onto cards in the same visual style as the audited `<Info>` cards. The card set changes from Goals/Constraints/QA Checklist/Risks to Overview / Options & Controls / How to use / What to expect / Pitfalls / QA checklist. The visual treatment stays close to what exists.
 - **Related topics:** render as chips. Clicking scrolls to the target topic by `id` — reuses the existing `scrollToSection` behavior. No URL hash change.
 - **Related links:** render as anchor chips, external target when `href` starts with `http`. Unchanged from audited behavior.
-- **Images:** render via the existing `ProductImageCarousel`, fed the `url` values of `QaImage` entries that have a `url`. Carousel renders only when at least one image has a `url`.
+- **Images:** render via the existing `ProductImageCarousel`, fed the `imageKey` values of `QaImage` entries that have an `imageKey`. Carousel renders only when at least one image has an `imageKey`.
 
 ## Cleanup folded into the build
 

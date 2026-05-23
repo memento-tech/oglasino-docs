@@ -149,6 +149,8 @@ The same rule applies to `state.md` and `decisions.md` edits this chat produces.
 
 ## 6. How to write
 
+**CopyPaste content** When writing copy paste content for Igor, always write in copy paste format
+
 **Short sentences in conversation with Igor.** One idea per sentence.
 
 **Plain words in conversation with Igor.** If a normal person wouldn't say it, don't say it. Legal terms are the exception, but always explain them once on first use.

@@ -106,6 +106,8 @@ Apply these every turn. Do not relax them across a long chat.
 
 ## 3. How to write
 
+**CopyPaste content** When writing copy paste content for Igor, always write in copy paste format
+
 **Short sentences.** One idea per sentence. If a sentence has more than one clause joined by "and," "but," "—," or ";", break it.
 
 **Plain words.** "Correctly distinguishes" → "splits." "Accumulate without owner intent" → "pile up." If a normal person wouldn't say it out loud, don't write it.

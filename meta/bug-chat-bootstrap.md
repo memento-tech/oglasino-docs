@@ -161,6 +161,8 @@ Same as Mastermind. Apply every turn.
 
 ## 7. How to write
 
+**CopyPaste content** When writing copy paste content for Igor, always write in copy paste format
+
 **Short sentences.** One idea per sentence.
 
 **Plain words.** If a normal person wouldn't say it out loud, don't write it.

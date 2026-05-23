@@ -6,6 +6,320 @@ Format: each decision has a date, a one-line summary, the reasoning, and the alt
 
 ---
 
+## 2026-05-23 — Google Analytics v1 shipped (web complete; mobile deferred)
+
+Complete client-side GA4 instrumentation in `oglasino-web` plus one backend field in `oglasino-backend`. Code-complete across nine engineer briefs landed on `dev` between 2026-05-22 and 2026-05-23. Stage GA4 property (`oglasino-stage-49abb`, `G-P0LEVEJ0V9`) configured 2026-05-23 with custom dimensions, conversion events, internal-traffic filter, and 14-month retention. Prod GA4 property (`oglasino-prod-7e5db`, `G-GNKB4WBNC0`) configured 2026-05-23 with the same runbook.
+
+**What shipped:**
+
+- **Foundation** (`src/lib/analytics/`): `track(event, params)` helper with three guards (server-side, `__og_consent_loaded` falsy, `window.gtag` absent) plus `NEXT_PUBLIC_GA4_DEBUG_MODE` injection; `trackError(err, context)` helper with `Error` normalization and 200-char message truncation; full unit coverage.
+- **Script load** (`app/layout.tsx`): two `<Script strategy="afterInteractive">` blocks gated on `NEXT_PUBLIC_GA4_MEASUREMENT_ID`, with `gtag('config', ..., { send_page_view: false })` so the SDK's automatic page_view is disabled and `GA4RouteListener` fires it manually on pathname change.
+- **Stub initializers mounted**: `GA4RouteListener` (sibling to `NavigationProgressBar` in `app/[locale]/layout.tsx`) fires `page_view` on pathname change; `GA4UserIdSync` (mounted from `AppInit.tsx`) calls `gtag('set', { user_id })` after `useAuthResolved()` is true. The third diagnostic initializer `GA4ErrorListener` registers `window.addEventListener('error', ...)` and `window.addEventListener('unhandledrejection', ...)` with `instanceof Error` normalization.
+- **Backend `wasRegister` field** (`oglasino-backend`): new `SyncResult(User user, boolean wasRegister)` record returned by `FirebaseAuthService.getOrCreateUser`. `wasRegister` derived inside the synchronized `createUserSynchronized` block at the actual `INSERT` branch — concurrent-create race correctly resolves with the loser thread reporting `false`. `AuthUserDTO` carries the field on the wire; the error response (`ProductErrorResponse` shape per Part 7) intentionally does NOT carry it.
+- **12 events plus automatic `page_view`** wired across the firing surfaces:
+  - `page_view` — pathname change.
+  - `sign_up`, `login` — `UseTokenRefresh.tsx` post-`setUser`, discriminated by backend-authoritative `wasRegister`. Provider mapping from `firebaseUser.providerData[0]?.providerId` (`password → email`, `google.com → google`, `facebook.com → facebook`).
+  - `product_view` — new `ProductViewTracker` client island mounted from the product detail page, `is_owner_view` computed from `useAuthStore.user.id === ownerId`.
+  - `product_create_started` — `CreateNewProductDialog.tsx` mount effect when the wizard's first user-facing step (`currentStep === 0`, `ImageSelectionProductDialog`) mounts.
+  - `product_create_completed` — `UploadedProductDialog.tsx` first statement inside the `result.type === 'success'` branch.
+  - `contact_seller_clicked` — three buttons: `CallUserButton.tsx` (top of `handleClick`, with new `productId` prop plumbed from `ProductFunctions.tsx`); `StartMessageButton.tsx` (happy-path branch only — not on login-dialog or block-info-dialog branches); `FavoriteButton.tsx` (add-transition only via `const isAdding = !isFavorite` captured AFTER the `!user` and owner early returns).
+  - `message_sent` — `useChatStore.sendMessage` after `await batch.commit()` resolves, before the optimistic-message replace.
+  - `search` — `SearchInput.commitSearch` with 100-char truncation.
+  - `view_search_results` — new `ViewSearchResultsTracker` client island mounted from home and catalog pages, fires once per mount when a non-empty search term is present.
+  - `filter_change` — `FilterManager.tsx` SYNC-TO-URL effect, gated by `hydrated` + `newUrl !== current` so URL hydration doesn't trigger spurious events; `filters_active` built from category-key presence only (no filter values).
+  - `exception` — `app/error.tsx`, `app/global-error.tsx`, plus `GA4ErrorListener`. Four `boundary` parameter values: `'route'`, `'global'`, `'window_onerror'`, `'unhandled_rejection'`.
+  - `form_submit_failed` — `parseProductValidationErrors` refactored to return `{ byField, list }` dual-view shape preserving Part-7 `code` end-to-end. Backend-validated forms (product create step 1 + step 4, product update) fire with real Part-7 codes; client-Zod forms (register, login, profile update) fire with synthetic codes defined inline at each validation branch. `SuggestCategoryDialog` left unchanged — boolean error shape too coarse.
+
+**Key architectural decisions captured during the feature:**
+
+- **Single `track` helper, no per-event helpers.** Three guards keep events safe pre-consent and pre-`gtag.js`-load. Every event call site uses `track(...)`; no direct `window.gtag(...)` calls outside the helper.
+- **`send_page_view: false` on `gtag('config', ...)`.** GA4's automatic `page_view` would miss Next.js client-side route transitions. The custom `GA4RouteListener` captures them.
+- **`useAuthResolved` gates `user_id` and `is_owner_view`.** `gtag('set', { user_id })` only fires after Firebase auth has resolved AND the store has hydrated. `is_owner_view` on `product_view` waits for resolution before firing, so anonymous-vs-owner classification is correct.
+- **`wasRegister` is backend-authoritative.** The frontend's `nextRegisterDisplayName` cell continues to serve its display-name role on the `/auth/firebase-sync` POST but is no longer the sign-up discriminator. The backend bit captures registration on every auth method (email+password, Google, Facebook) — the audit's "first-time social-auth looks like login" concern is closed.
+- **PII contract enforced at every firing site.** Free-text fields (name, description, displayName, email, phone, message bodies, image URLs) never enter event payloads. Audit § PII-leakage notes is the contract. Verified by the brief 5 engineer's `## PII check` discipline and carried forward to briefs 6, 7, 9 by the same shape.
+- **`form_submit_failed.error_code` split between backend codes and synthetic codes.** Product flows fire with real Part-7 codes preserved through `parseProductValidationErrors` (which now returns `{ byField, list }` — the dual-view shape is the engineer's design judgment that improved on the brief's literal proposal). Register / login / profile update fire with synthetic codes defined inline at each validation branch; the synthetic set is documented in the brief 9 session summary.
+- **`FavoriteButton` add-only and `StartMessageButton` happy-path-only.** Locked design calls in the brief 5+9 review. Friction interactions (anonymous click, blocked user, not-logged-in) do not fire `contact_seller_clicked`. The events measure committed engagement, not click attempts.
+- **Filter-change values vs keys.** `filter_change.filters_active` carries category KEYS only (`'price'`, `'region'`, `'search'`, `'filter:condition'`), not VALUES. Filter-option values would be high-cardinality and borderline-PII (specific category names from user-controlled filters).
+- **No backend changes beyond `wasRegister`.** GA4 v1 is client-side telemetry. Trust boundaries unaffected — no event payload feeds any server-side decision.
+
+**Stage and prod GA4 admin configured per the runbook in the spec's § GA4 admin-side setup runbook:**
+
+- Properties identified and Web data streams confirmed.
+- 19-20 event-scoped custom dimensions registered per property.
+- Conversion events marked: `sign_up`, `product_create_completed`, `contact_seller_clicked`, `message_sent`.
+- Consent Mode v2 settings: behavioral / conversion modeling enabled where the UI exposes it.
+- Internal-traffic filter active per property: Igor's home IP added, filter state flipped from Testing to Active.
+- Data retention: 14 months with reset-on-new-activity.
+- DebugView verified working with `NEXT_PUBLIC_GA4_DEBUG_MODE=true` and the stage measurement ID.
+
+**Manual end-to-end verification:** Igor walked the full event matrix against stage 2026-05-23, including the seven-step DevTools verification of the script load and consent-gate behavior. All 12 events fired correctly, consent gating worked (Reject-all → cookieless pings, no `_ga`/`_gid` cookies; Accept-all → cookies + identifiers), first `page_view` did not race (theoretical concern flagged by brief 2 engineer didn't manifest).
+
+**Process notes from the feature:**
+
+- **Audit-driven Phase 5 is durable.** The Phase 2 read-only audit caught five real issues before they hit Phase 5: `CallUserButton` missing product context, social-auth `wasRegister` discriminator gap, `error_code` source for form failures, `next/script` not-yet-used misstatement, `addDoc` reference rot in the spec. All resolved in Phase 3 amendments before any engineer began coding.
+- **Sequential audits do drift.** A Phase 2 audit's line numbers and call-site assumptions can drift between audit and execution. Three small drifts surfaced during code briefs (CallUserButton call site is `ProductFunctions.tsx` not `UserDetails.tsx`; `parseProductValidationErrors` returns a flat map not per-error objects; `currentStep === 0` is `ImageSelectionProductDialog` not `BasicInfoProductDialog`). All caught by engineers' "Brief vs reality" discipline.
+- **`parseProductValidationErrors` dual-view shape (brief 9) is the engineer's improvement on Mastermind's proposal.** The brief's literal proposal would have forced ~30 consumer-site mechanical edits across three files. The engineer's `{ byField, list }` shape preserved the existing consumer ergonomics and added per-error iteration where the brief needed it. Pattern for future briefs: when a refactor's blast radius isn't obvious from the audit, the engineer's judgment at implementation time can improve on the brief.
+- **`issues.md` ceiling discipline worked.** GA4 v1 added one entry (`GlobalError` naming) and closed it in the same feature, for net zero. Five free-floating observations from engineers (the `selectedModeratioStates` typo, `useAuthStore` "sole caller" comment drift, `refreshUser` second-caller, FavoriteButton `console.error` in catch, seventh `setErrorMessage` site in profile_update) were held without filing — preserved in session summaries for future cleanup chats.
+
+**Cross-repo coordination:** the feature touched `oglasino-web` (eight code briefs) and `oglasino-backend` (one code brief). No cross-repo briefs — Phase 3 amendment 2 split brief 3 (backend `wasRegister`) and brief 4 (web auth events) into separate sessions per conventions Part 3.
+
+**Outstanding pre-launch action:** legal-drafts chat notification (per spec § Open items at draft time). Privacy Policy may need a paragraph update reflecting GA4's cookieless-ping behavior under `analytics_storage: denied`. Drafted as a separate Igor task; not blocking the feature shipping but blocking the legal review milestone.
+
+**Mobile (`oglasino-expo`) is deferred to a future Mastermind chat.** Mobile analytics has a distinct SDK story (`@react-native-firebase/analytics` or `expo-firebase-analytics`) plus App Tracking Transparency on iOS. Queued in the Expo backlog table.
+
+**Alternatives considered and rejected:**
+
+- Combining Consent Mode v2 and GA4 v1 into one feature — rejected per the 2026-05-20 decisions entry; consent has independent UX and legal implications; bundling obscures decisions.
+- Server-side GA4 via Measurement Protocol — rejected for v1; doubles event-modeling work for a benefit (ad-blocker resilience) that doesn't justify the cost pre-launch.
+- Single measurement ID across stage and prod — rejected per the spec; stage traffic would pollute prod reports.
+- Loading `gtag.js` via raw `<script>` synchronously — rejected; `next/script` with `strategy="afterInteractive"` defers until after the inline consent snippet executes, preserving Consent Mode v2's ordering contract.
+- Firing `contact_seller_clicked` on Favorite REMOVE — rejected; un-favoriting is the opposite engagement signal, would produce a meaningless metric.
+- Firing `contact_seller_clicked` on `StartMessageButton`'s friction branches (not-logged-in, blocked) — rejected; friction isn't engagement.
+- Extracting a shared `fireContactSeller(method, productId, sellerId)` helper across the three contact-seller buttons — rejected per Part 4a; three callers, three lines each, abstractions earn their introduction.
+- Firing on `SuggestCategoryDialog` failure — rejected; boolean error shape carries no field or code, would produce a meaningless event.
+- Stack traces in `exception` event payload — rejected per spec; too large and may contain PII fragments from URL params.
+- Filter values in `filter_change.filters_active` — rejected; high-cardinality and borderline-PII.
+
+---
+
+## 2026-05-22 — Cookies-closing
+
+The cookies-closing Mastermind chat closed today. Four work items: card-size button display fix, isDashboard → portalScope migration (including dashboard → owner rename), userPreferenceService removal, and language + theme as preference cookies. Items 1–3 shipped as spec'd. Item 4 shipped the language portion with significant divergence from the original spec; theme deferred to a future Mastermind chat with handoff doc at `.agent/handoffs/theme-path-a.md`.
+
+### Item 4 — language shipped, theme deferred
+
+- **Cookie carries bare language code** (`'sr' | 'en' | 'ru' | 'cnr'`), not tenant-locale compound. Spec decision #1 — unchanged.
+- **Cookie-wins-over-URL middleware redirect** runs in `proxy.ts` (Next.js 16 naming). When cookie's language differs from URL's language AND target tenant supports cookie's language, redirect. When cookie's language isn't allowed by target tenant, URL wins (cookie preserved as preference). Spec decision #2 — implemented and shipped.
+- **`getLocalizedPath` helper** preserves paths uniformly across language change. Product URLs use canonical-slug rewrite after data resolves (decision #3-A from the revised spec). Removed earlier reset-to-tenant-root behavior for product paths. Spec decision #3 (revised) — shipped.
+- **`localeDetection: false` and `localeCookie: false`** in `routing.ts`. Custom proxy logic is the sole locale authority. Spec decision #4 — shipped.
+- **Theme persistence path B1-A (`next-themes` custom storage adapter) was unavailable in v0.4.6.** Path A (replace `next-themes` with minimal cookie-based theme system) chosen but deferred to future chat. See handoff. Spec decisions #5–#6 — deferred.
+- **Reconciliation semantics diverge by preference type** (spec amendment to decision #7):
+  - **Card-size:** in-memory-wins-on-grant. The in-memory state reflects a real user-click signal; if it differs from the cookie on consent grant, write the in-memory value to the cookie. Handled by `SyncCardSizeFromCookie`.
+  - **Theme:** in-memory-wins-on-grant (will follow same pattern when implemented).
+  - **Language:** cookie-wins. The in-memory locale (from `useRoutingLocale()`) reflects the URL, which can be a forced fallback from a cross-tenant redirect rather than a user preference. No URL→cookie sync component exists; cookie is set only by explicit user choice via PortalConfigDialog.
+- **Defensive cookie parsing in middleware.** Malformed cookie or missing fields fall through to URL wins. Spec decision #8 — shipped.
+- **`extraProducts.recently.viewed.title` translation key stays.** Spec decision #9 — known shortcut, not corrected in this work.
+- **No first-visit cookie seed from URL.** Spec decision #10 — shipped.
+- **Theme UI stays bi-state.** "System" option out of scope; logged to `issues.md`. Spec decision #11 — shipped (deferred-component).
+
+### Architectural changes during Item 4 (not in original spec)
+
+- **Routing locale separated from formatter locale.** The compound routing locale (`me-cnr`, `rs-sr`) was passed to `next-intl`'s message formatter, which calls `Intl.Locale("me-cnr")` and throws on invalid BCP-47 tags. Fix: `request.ts` now derives bare language (`cnr`, `sr`) for next-intl's formatter; the compound stays as the routing identity. Two new primitives — `useRoutingLocale()` (client) and `getRoutingLocale()` (server) — return the compound and replaced 22 of the 38 prior `useLocale()` / `getLocale()` call sites. The remaining 4 sites consume the bare formatter locale for `Intl.*` APIs and stay on next-intl's `useLocale()`. Option B chosen from a four-option investigation; full reasoning in the briefs.
+
+- **`src/i18n/navigation.ts` rewritten to wrap `createNavigation`'s exports.** Brief 3d's bare-locale change broke `next-intl`'s `<Link>`, `useRouter`, and `usePathname` (they internally read `useLocale()` and used bare for URL prefixing). New wrappers source the compound from `useRoutingLocale()` / `useParams()`. 18 import sites unchanged at call sites; wrapper transparent. Additional 15 plain `useRouter` sites from `next/navigation` migrated to wrapped router across Briefs 3f and 3i.
+
+- **Cross-tenant routing rules.** Product page uses code-equality (`baseSite.code !== productDetails.baseSiteOverview.code`). User page uses domain-equality (`baseSite.domain !== userDetails.baseSiteOverview.domain`). Asymmetry is deliberate: products are tenant-scoped (rs and rsmoto don't share inventory despite sharing a domain); users are domain-scoped (a user belonging to either rs or rsmoto is accessible from both domains because they share one). Confirmed with Igor.
+
+- **PortalConfigDialog tenant-change behavior.** On tenant change, `/product/*` and `/catalog/*` paths drop to tenant home (because product IDs and catalog slugs are tenant-scoped). Other paths preserve. On language change, all paths preserve (since slugs are language-independent). Single shared `getLocalizedPath` helper handles language; inline regex in PortalConfigDialog handles tenant.
+
+- **Cookie-preservation on cross-tenant redirects.** When the user is bounced to a tenant that doesn't support their preferred language (e.g., `cnr` user redirected to `rs` from product cross-tenant guard), URL's language defaults to the new tenant's default, but cookie's `lang` stays at user's actual preference. User returning to a tenant that supports their preference gets restored to their language. Applies to product cross-tenant guard, user cross-tenant guard, and PortalConfigDialog tenant switcher.
+
+- **`globalCookie` cleared on consent decline.** When preference consent transitions to denied, `globalCookie` is deleted entirely. Resolves write-side/read-side consent asymmetry: write-side gates on consent (proper), read-side (proxy cookie-wins) trusts the cookie's presence — under Option 4 (chosen from a four-option investigation), the cookie only exists when consent was granted, so the read-side correctly trusts it. Includes self-healing migration on app init for pre-consent-system cookies. Spec amendment captured below.
+
+- **`useLanguageStore` collapsed.** The store had no readers after Brief 3b deleted `SyncLanguageFromCookie`. PortalConfigDialog now writes the cookie directly via `updateGlobalCookie('lang', lang)` under same-tenant + consent gates. One file deleted.
+
+- **Routing-cookie categorization.** `globalCookie.lang` is treated as a preference cookie (consent-gated on write, cleared on decline). This is a deliberate choice — an alternative reading would categorize it as functional (strictly necessary for multilingual routing), which would have removed the write-side consent gate entirely. Chose preference categorization for symmetry with card-size and theme and to keep the consent-gating story consistent across all `globalCookie` fields.
+
+### Asymmetries to remember
+
+- Routing locale ≠ formatter locale. `useRoutingLocale()` for URL construction; `useLocale()` for `Intl.*`.
+- Products use code-equality on cross-tenant comparison; users use domain-equality.
+- Reconciliation semantics: card-size and theme in-memory-wins-on-grant; language cookie-wins (no sync component).
+- `<Link>` and `useRouter` from `@/src/i18n/navigation` (wrapped); `<a>` and `Link` from `next/link` consume URLs directly (no wrapping).
+
+---
+
+## 2026-05-22 — Brevo SMTP integration shipped; pattern for transactional email send
+
+Backend now sends outbound transactional email via Brevo's SMTP relay (`smtp-relay.brevo.com:587` STARTTLS) on the free tier. Wiring is identical across dev / stage / prod; the per-environment difference is which Brevo SMTP key is used (`oglasino-backend-prod` for prod; `oglasino-backend-stage` shared by stage and dev) and which Brevo-verified From address gets stamped (`noreply@oglasino.com` for prod; `noreply-stage@oglasino.com` for stage + dev). Reply-To is `support@oglasino.com` on every environment so user replies on `noreply-*` mail land in the monitored inbox.
+
+**The shape:**
+
+- `oglasino.email.*` `@ConfigurationProperties` carries the envelope (From / From-name / Reply-To). All values come from environment variables — no defaults baked in, missing variable fails fast at startup.
+- `spring.mail.host/port/username/password` plus the `mail.smtp.auth=true` / `mail.smtp.starttls.enable=true` / `mail.smtp.starttls.required=true` block wires Spring Boot's `MailSenderAutoConfiguration` — no `MailConfig @Configuration` class needed.
+- `EmailService.sendPlainText(to, subject, body)` is the only entry point this brief; per-feature briefs (User Deletion confirmations, password reset, ban notifications, etc.) extend the interface for their own needs.
+- `DefaultEmailService` uses `JavaMailSender.createMimeMessage()` + `MimeMessageHelper` to build a proper-headered `MimeMessage`, sets From + From-name + Reply-To from `EmailProperties`, sends. UTF-8 throughout.
+- The brief ships a throwaway smoke endpoint `POST /api/secure/admin/email/test` (admin-gated, returns 500-with-`{exception, message}`-body on `MailException`) so Igor can prove deliverability end-to-end. **The endpoint is deleted by the next email-using-feature brief.**
+
+**Trust boundary:** the From / From-name / Reply-To are server-derived from `EmailProperties` and never client-supplied. The smoke endpoint accepts `to`/`subject`/`body` from an authenticated admin but does not validate per-target (the throwaway lifetime + admin gate are the protection); permanent admin-broadcast surfaces would need their own trust-boundary work. The smoke endpoint's `{exception, message}` 500-response shape is a Part 7 (error contract) deviation scoped to the throwaway endpoint's lifetime; the next email-using-feature brief deletes the endpoint and the deviation goes with it. `EmailService.sendPlainText` itself is internal — server-side callers only.
+
+**Free-tier quota:** Brevo free tier is 300 emails/day, shared across prod + stage (dev reuses stage's key). Per-feature briefs that ship high-volume transactional email need to either move Brevo to a paid tier or migrate to a different provider; the `EmailService` interface is the swap-out seam.
+
+**Firebase auth emails (registration verification, password reset, email change) remain on Firebase's default sending infrastructure (`noreply@<project>.firebaseapp.com`) for now.** Decision deferred to post-launch — see [`.agent/handoffs/email-followups.md`](.agent/handoffs/email-followups.md) for the Option-C unification plan that migrates Firebase auth emails to Brevo via Firebase Admin SDK's `generateEmailVerificationLink` / `generatePasswordResetLink` / `generateVerifyAndChangeEmailLink`. Tracked as a Risk Watch item in `state.md`.
+
+**Alternatives considered.** A `MailConfig @Configuration` class — rejected, Spring Boot autoconfigures `JavaMailSender` from `spring.mail.*` properties; the YAML config plus `EmailProperties` is all that's needed. Inlining `DefaultEmailService` into the throwaway controller — rejected, would need to be undone the moment the next per-feature brief lands. Per-target validation / allowlist on the smoke endpoint — rejected per brief; the throwaway lifetime plus admin gate is the protection. Customizing Firebase email templates in the Firebase Console (Option B) — rejected as a half-measure; users would still see two visually-distinct email systems (Firebase auth emails styled one way, Brevo feature emails styled another) and two sending infrastructures to debug. Option C (full unification on Brevo) is the target end-state; Option A (Firebase-as-is) is the launch state.
+
+---
+
+## 2026-05-21 — Portal home cold-load cascade: three fixes shipped
+
+The portal home (`/[locale]`) fired 4 `POST /api/public/product/search` calls per hard refresh and 3 per normal refresh, plus duplicate `POST /api/auth/firebase-sync` and `POST /api/secure/push/token` on hard refresh, with a visible product-list swap during load (the "jerk"). Two read-only investigations + three small fixes in `oglasino-web` closed the cascade.
+
+**Net effect:** hard refresh 4 → 2 product searches, 2 → 1 firebase-sync, 2 → 1 push/token. Normal refresh 3 → 1 product search (the other two were already 1). Visible jerk eliminated.
+
+**Three independent root causes, three fixes:**
+
+1. **FilterManager SYNC TO URL trailing-slash false-positive + redundant `setTimeout(router.refresh)`** (`src/components/client/initializers/FilterManager.tsx`). The effect's URL-canonicalization gate compared `newUrl` (always trailing-slash on the no-filters home) to `current` (no trailing slash) and fired `router.replace('/rs-sr/') + setTimeout(() => router.refresh(), 0)` on every refresh. In Next 16, `router.replace` to a new pathname already refetches RSC; the `setTimeout(refresh)` was leftover from an older Next version where `replace` did not consistently refetch. One firing → two RSC re-renders → two extra product-search POSTs. Fix: normalize the trailing slash in the gate (so the false positive doesn't trip on the canonical home URL), and delete the redundant `setTimeout(router.refresh)`. Lever A is route-agnostic (no other FilterManager-mounted route had the false positive because only the home produces `pathname === '/'` from next-intl's `usePathname`); Lever B applies to every legitimate FilterManager trigger anywhere. Both shipped in one session.
+
+2. **`randomSeed: Date.now()` in the `FilteredProductList` React key** (`src/components/client/product/FilteredProductList.tsx`). The no-filters home synthesizes `{ applyRandom: true, randomSeed: Date.now() }` in `parseFiltersFromQueryParams` on every SSR render. The inner `ProductList` was keyed on `JSON.stringify(filtersData)`, so a new seed → new key → React unmounts the previous list and mounts a fresh one with the new ordering. After the FilterManager fix this was mostly latent on the canonical home, but any *real* filter change still causes one re-render with a fresh seed and would re-surface the jerk. Fix: destructure `randomSeed` out before stringifying for the key calculation; the seed still reaches the backend via the unmodified `filtersData` on the request side. Locks the symptom out unconditionally.
+
+3. **No single-flight guard on `onIdTokenChanged` cascade** (`src/components/client/initializers/UseTokenRefresh.tsx`). The Firebase SDK emits `onIdTokenChanged` twice on cold session restoration (persisted token, then refreshed token ~8 ms later); both emissions fired `syncUserToBackend` + `initPushForAuthenticatedUser` independently. The "sole hydrator" contract (`decisions.md` 2026-05-21 Consent Mode v2 entry) was intact — there was exactly one listener — but the listener had no idempotency. Fix: `useRef`-held `{ inFlightUid, lastSyncedUid, lastSyncedAt }` with a 2-second drop window for same-uid back-to-back emissions; `writeFirebaseTokenCookie(token)` hoisted into the listener so it runs on every emission (the cookie must mirror the rotated token even when the second backend sync is dropped); guard resets on sign-out so a sign-out → sign-in handshake re-fires a fresh cascade; `lastSyncedAt` only set on success (failed syncs retryable immediately). The 2-second window is a constant, not configurable per Part 4a — the value has one setting and no foreseeable second setting.
+
+**Cross-cutting patterns surfaced for future reference:**
+
+- **`router.replace` + `setTimeout(router.refresh)` is a double-fetch anti-pattern in Next 16.** Any place in the codebase still doing this should be reviewed. The audit's adjacent observation #5 flagged this generally; the fix removes it from FilterManager. If other surfaces have the same pattern, they have the same bug.
+- **`useRef`-held single-flight is the right shape for `onIdTokenChanged` (and analogous) listeners.** The Firebase SDK's documented cold-restoration double-emission behavior is benign as long as the listener has an idempotency guard. The guard pattern (`inFlightUid` + `lastSyncedUid` + recent-completion window) is reusable for any other listener-driven backend cascade if one appears.
+- **React `key={JSON.stringify(x)}` requires the stringified shape to exclude any field that is per-render-volatile but should not cause remount.** The `randomSeed` case is the canonical example: backend wants it, React must not see it.
+
+**Cross-repo coordination:** none. All three fixes confined to `oglasino-web`. No backend, router, firestore-rules, or docs (besides this entry) changes required. The `userPreferenceService` tracking-cookie surface and the favorites-icon flicker (audit-1 adjacent observation; smaller-scale visual churn that lands on top of the seed jerk) remain as separate follow-up items.
+
+**Engineering footprint:**
+
+- Audit-1: read-only, 5 files audited, 5-question structured report.
+- Audit-2: instrumentation pass, 2 temporary `console.log` lines added and removed in the same session.
+- Brief 1 (FilterManager): +2 / −2 lines in one file. 206 tests green.
+- Brief 2 (FilteredProductList): destructure-and-rest projection on the key, one-line comment. Tests green.
+- Brief 3 (UseTokenRefresh): +50 / −3 lines in one file, manual verification owed by Igor before final closure. 206 tests green.
+
+**Alternatives considered and rejected:**
+
+- **Stabilize `randomSeed` across the lifecycle of one user visit** (cookie-stored seed, per-route token). Rejected for the immediate fix — larger surface, addresses a different UX question (which products appear on re-paginate). Could be revisited as follow-up if the random-on-every-render UX is itself a problem.
+- **Centralize single-flight at the `syncUserToBackend` / `initPushForAuthenticatedUser` service layer.** Rejected — different blast radius, and the only listener-driven caller is `UseTokenRefresh`. The other caller of `syncUserToBackend` (`useAuthStore.refreshUser` from `UserBasicDataSelectorDialog`) is user-action-triggered and has different semantics; guarding it at the service layer would force false-positive drops on user-initiated re-syncs.
+- **Move `writeFirebaseTokenCookie` out of `syncUserToBackend` entirely** (so the cookie write lives only in the listener and in `refreshUser`). Rejected — bigger blast radius across two files, and the brief asked the fix to be confined to `UseTokenRefresh.tsx`. The in-function call dedupes via token-string identity (`authTokenCookie.ts:36`), making the redundant call safe. If the structural duplication ever feels untidy, a future brief can consolidate.
+- **A generic URL-canonicalization helper for the trailing-slash case.** Rejected — only one call site has this problem (FilterManager's home-route URL construction); a helper for one caller is premature per Part 4a.
+
+---
+
+## 2026-05-21 — Consent Mode v2 shipped
+
+A complete cookie consent system in `oglasino-web` plus translation seeds in `oglasino-backend`, modeled on Google's Consent Mode v2 four-signal protocol. Code-complete across both repos as of 2026-05-21.
+
+**What shipped:**
+
+- **Foundation** (`src/lib/consent/`): `ConsentData` type with literal-typed `necessary` + permanently-denied `ad_*` fields; client-side cookie helpers (`readOgConsent`, `writeOgConsent`); SSR helper (`readConsentForSsr`); Zustand store (`useConsentStore`); shared side-effects helper (`applyConsent`); preference-gating helper (`isPreferenceConsentGranted`).
+- **SSR snippet**: inline `<script>` in `app/layout.tsx`'s `<head>` calls `gtag('consent', 'default', ...)` synchronously before any other script, populated from the user's `og_consent` cookie or all-denied defaults.
+- **Banner**: rebuilt Drawer with twin Accept-all / Reject-all primaries plus Customize expander. Non-dismissible on first visit, dismissible on reopen. Mounted in portal and owner layouts.
+- **Footer link**: "Cookies" entry, last position in company navigation. Reopens the banner via `useConsentStore.requestReopen()`.
+- **Dedicated settings page**: `/owner/cookies` hosts the three toggles (necessary, preference, analytics) with immediate-write semantics matching the banner. No Save button. Sidebar entry under User section as sibling to Settings.
+- **Card-size cookie gating**: `usePortalCardSize.ts` and `useDashboardCardSize.ts` no-op their writes when consent is undecided or denied.
+- **20 + 4 = 24 keys in `COOKIES` namespace + 1 key in `NAVIGATION` namespace** seeded across EN / RS / RU / CNR via inline-append to `0001-data-web-translations-*.sql`. EN copy final; RS / RU / CNR marked as placeholders pending native-translator review.
+- **Legacy banner removed**: `CookieBanner.tsx`, `firebaseAnalytics.ts`, `PREFERENCE_COOKIE_NAME` alias, `GlobalCookie.cookieConsent` field, `migrateLegacyConsent` function, and all legacy translation keys (`banner.header` / `banner.description` / `banner.required.label` / `banner.preference.cookies` / `banner.accept.label` / `config.label` / `config.description` / `required.label` / `required.description` / `required.sub.description`) deleted from web code and backend SQL.
+- **Backend mirror removed**: `allowPreferenceCookies` dropped end-to-end from `AuthUserDTO`, `UpdateUserDTO`, `LoginRequest`, `User` entity, `users` table, and all five propagator call sites. Consent state is browser-local. The cross-device sync question is deferred to follow-up work.
+
+**Key architectural decisions (in execution order):**
+
+- **One cookie, browser-scoped, single source of truth.** `og_consent` is the canonical store. The store is a thin cache.
+- **Immediate-write everywhere consent is mutated.** Banner, settings page, footer link — all flip state on click, no Save button. The original spec had the settings page on a bulk-save form; mid-feature Igor's UX call moved it to a dedicated immediate-write page.
+- **SSR snippet must be synchronous inline `<script>`, not `next/script`.** Consent Mode v2 requires the `gtag('consent', 'default', ...)` call to populate `dataLayer` before any other script can read it. The Next.js + Turbopack framework chunks above the inline script are `async`, so the parser blocks on the inline script first.
+- **`sanitizeForSnippet` defense-in-depth.** Runtime validation of the four interpolated signal values before they reach the inline `<script>` or `gtag('update', ...)` call. TypeScript guarantees the shape at compile time, but a future migration or corruption can't reach the wire.
+- **No legacy migration shim.** Pre-production: no real users to migrate from the legacy `{ necessary, preference }` cookie shape. Brief 7 stripped the migration path entirely.
+- **No backend mirror.** The pre-Consent-Mode-v2 `allowPreferenceCookies` field was duplicate bookkeeping with no server-side consumer. Brief C removed it. Cross-device sync becomes a clean follow-up feature when there's a product need.
+
+**Cross-repo coordination:**
+
+This feature crossed `oglasino-web` and `oglasino-backend` cleanly via per-repo briefs. One process error (brief 8 was drafted as cross-repo by Mastermind in violation of conventions Part 3; engineer correctly refused; split into 8 + 8b) and one rule-misreading (brief 8 framed Rule 3's dedicated-file exception incorrectly; engineer caught mid-session) — both logged to `issues.md` as Mastermind process learnings.
+
+**SSR cache hygiene note (development):**
+
+Late in the feature, Igor encountered an SSR Suspense failure on `/rs-sr` and `/rs-sr/owner/*` (admin worked, `/` worked). Surfaced as `TypeError: controller[kState].transformAlgorithm is not a function` — Node's WHATWG Streams abort cleanup, with the underlying throw masked by Next.js framework frames. Diagnostic web session could not reproduce in a fresh dev-server environment. Resolved by `rm -rf .next` + restart on Igor's machine. Root cause: Turbopack/HMR cache corruption from cumulative `'use client'` module hot-replacements during the feature's many sequential briefs. Not a code defect. Worth keeping in mind for future features that land many briefs touching the same `'use client'` modules in sequence — periodic dev-server restarts avoid the symptom.
+
+**Follow-up work queued in the next-Mastermind handoff brief** (`.agent/handoffs/consent-mode-v2-followups.md`):
+
+- Remove `userPreferenceService` tracking cookie surface and its dependent consumers.
+- Persist language and theme as preference cookies.
+- Cross-device consent sync (backend storage of `ConsentData`, login-flow sync, logout reconciliation, multi-user/multi-browser support).
+
+**Alternatives considered and rejected:**
+
+- Two cookies (one per logged-in identity, one anonymous) for multi-user/multi-browser support — rejected per Igor as too complex for v1; queued in the handoff brief.
+- Backend storage of full `ConsentData` for cross-device sync — rejected for v1 because the platform has no real users yet and the partial-mirror today buys nothing.
+- Cookie clearing on logout for shared-browser hygiene — rejected per Igor's call; deferred to the cross-device sync work in the handoff brief.
+- Preserving the legacy `{ necessary, preference }` migration shim — rejected because pre-production has no users to migrate.
+
+**Outstanding pre-launch action:** native-translator review of placeholder RS / RU / CNR copy across 25 keys, matching the User Deletion precedent.
+
+---
+
+## 2026-05-20 — Messaging feature shipped (backend + web + rules complete; mobile deferred)
+
+End-to-end user-to-user messaging on Oglasino is production-ready: Firestore Security Rules hardened, web client send flows fixed and made atomic, auto-linkify for URLs in messages, chat list "Load more", admin chat-list receiver bug fixed, public anonymous `/api/public/notification/test` endpoint removed, and a Sunday cleanup cron that anonymizes hard-deleted users' chat data using a `"deleted:<original-uid>"` sentinel. Mobile (`oglasino-expo`) adoption is the only remaining piece, deferred to its own post-launch Mastermind chat per the existing Expo backlog pattern.
+
+**The headline production-defect fix:** the new-chat send batch was failing `permission-denied` at the message-create step because the Firestore rule used `get(/chats/{chatId})` — which evaluates against pre-batch state, where the chat document does not yet exist. Switching all three `chats/{chatId}/messages` rules (read, create, update) from `get()` to `getAfter()` lets the rule see the in-flight chat doc creation in the same batch. The atomic four-write batch (chat root + both sidecars + first message) now lands cleanly. The same rule pass also locked field-shape immutability across the message-update rule and locked the notification create rule to `if false` (Firebase Admin SDK bypasses rules anyway; the prior `request.auth == null || admin claim` rule was a critical trust-boundary violation letting anonymous internet users write notifications under any user's path).
+
+**Key engineering and architectural decisions across the feature:**
+
+- **The chatId algorithm is the contract.** `sorted([uidA, uidB]).join('_')` is computed identically in web (`useChatStore.ts:380, :683`) and backend (`DefaultTrustReviewService.java:114-116`). The convention is documented in `features/messaging.md` §2 and §3.1. Diverging from it silently breaks trust-review. No shared package today; each client re-implements the one-line scheme — promotion to a shared package is post-launch if a third client appears.
+- **`getAfter()` is the load-bearing primitive for atomic chat-creation flows.** Brief 1 changed all three message rules; future Firestore-rules work on this surface (or any surface that needs batched parent-and-child creation) should reach for `getAfter()` first.
+- **`get('productId', null)` for optional-field immutability.** Plain `==` comparison on a field that may be absent on both sides is engine-version-dependent in Firestore Rules. The `get(field, default)` form yields a defined value on both sides regardless of presence. Codified as a Phase 5 mid-stream amendment to the spec (§4.4) after the rules engineer surfaced the absent-`productId` case during test seeding.
+- **Anonymize-not-delete on user hard-delete.** Per the User Deletion feature's precedent (reviews are anonymized, not deleted, per its 2026-05-18 entry), messages from hard-deleted users have their `senderId`/`receiverId` rewritten to `"deleted:<original-uid>"`. The recipient's chat history reads coherently — "deleted user said X, then I said Y" instead of a missing message. The sentinel format cannot collide with any real Firebase UID because Firebase UIDs never contain `:`.
+- **Cron candidate-tracking via a dedicated `pending_chat_cleanup` table.** Considered (and rejected) folding the cleanup state into the existing `users` row as a tombstone. Chose a dedicated queue table for clean separation: User Deletion's hard-delete writes one row, the messaging cron consumes from the table, the cleanup is idempotent, per-user failures don't block the batch. The table sits in `V1__init_schema.sql` per the pre-prod schema fold (conventions Part 12).
+- **`messaging_cleanup_locks` is a sibling table, not an extension of `user_deletion_locks`.** Brief 5's engineer correctly identified that `user_deletion_locks` is a per-user admin-action table (locks-user-from-deletion), not a job-lock primitive. A sibling table with the proper singleton shape (`UNIQUE (job_name)`) is the right fix. If multiple crons later need singleton locks, a shared `scheduled_job_locks` table can be extracted in a future refactor brief; today only this cron uses the new table. The brief's initial premise that the locks table could be reused was incorrect, surfaced by the engineer at implementation time.
+- **Send-failure UX via React-boundary toast, not store-internal toast.** `useChatStore.sendMessage` now rethrows after cleanup; the React caller in `Messages.tsx` awaits and surfaces `notify.error`. Matches the pre-existing pattern for image-upload-failure toasts in `MessageInput.tsx`. The alternative — passing a translator function or callback through the store API — was considered and rejected because next-intl doesn't have a clean non-React access path and pushing translation into the store would have coupled two store actions to one toast call each.
+- **Navigation-aware temp state lifecycle.** `tempReceiver` and `tempProductContext` are cleared whenever the user navigates away from `/messages`, but preserved on send failure so retry from the same context works. `ChatsWatcher` was rewritten to use a previous-pathname guard (clear only when transitioning *away* from `/messages`, not *into* it from a fresh Start-Message click).
+- **Anchor visible-text vs `href` choice on auto-linkify.** A bare `www.example.com` URL displays as `www.example.com` (the user's raw text) but its `href` is the linkify-normalized `http://www.example.com` (so the browser navigates correctly). "What you see is what you click" reads as anti-mask language ("no 'click here' wrappers"), not as a literal `text === href` requirement. Engineer's call, mastermind-confirmed.
+- **`users/{userId}` Firestore collection tightened to owner-only.** Documents on this path carry PII (email, fcmToken, displayName, profileImageKey); the pre-fix `allow read: if true` was a privacy leak. No code in `oglasino-web` or `oglasino-backend` reads from this path in Firestore (audits confirmed); the mobile app may break post-rule-change and gets handled in the mobile catch-up chat.
+- **RU translations use Latin transliteration by convention.** Brief 4's engineer flagged the entire RU seed file using Latin transliteration as a possible drift; Igor confirmed it's the established convention. Documented here so future RU translation work matches.
+- **The `users.blocked` Firestore field is vestigial.** Surfaced during the §4.2 rule-tightening — present on user docs, read by no code. Logged separately for future investigation (`issues.md`-tracked since the audits dated 2026-05-20).
+- **The `fcmToken` location concern.** FCM tokens live on `users/{userId}` Firestore docs today. Even with the rule locked to owner-only, this is the wrong storage location — backend already has push-token rows in Postgres. Migration is post-launch work.
+
+**This decision folds in (and effectively obsoletes) the prior `state.md` Risk Watch entry "Messaging fix unblocks User Deletion smoke (current entry, mostly about messaging being broken in local stack)."** Messaging now works; User Deletion's smoke pass against the full deleted/banned/pending-deletion gating surface is the User Deletion feature's responsibility and stays open as a `state.md` Risk Watch item.
+
+**Engineering footprint:**
+
+- Brief 1 — Firestore rules + 23 tests (`oglasino-firestore-rules`), plus a follow-up Brief 1b for the `get('productId', null)` amendment + test 24. 24 tests passing.
+- Brief 2 — Web messaging core (`oglasino-web`). Eleven sub-edits: rename + clearing fix + atomic batches + send-failure toast + temp state lifecycle + `getActiveChat` fallback + Load more + `deleteChat` reorder + mark-seen reorder + deleted-user fallback rendering + polish bundle. 154 web tests still passing post-change.
+- Brief 3 — Auto-linkify (`oglasino-web`). `linkify-it@5.0.0` chosen over `linkifyjs@4.3.3` based on size (5× smaller) and license. 12 new tokenizer tests.
+- Brief 4 — Backend admin + endpoint cleanup + translation seeds (`oglasino-backend`). `getReceiverFromChatDoc` fixed (high-severity per-page receiver bug); `NotificationsControllerTest` removed; two new `MESSAGES_PAGE` keys seeded in four locales; `NotificationCategoryId.MESSAGE` confirmed zero callers and intentionally left as a stub for future push-notification work. 539 backend tests passing.
+- Brief 5 — Sunday cleanup cron (`oglasino-backend`). New `pending_chat_cleanup` and `messaging_cleanup_locks` tables in V1; `DefaultMessagingCleanupService` with `@Scheduled` cron; cross-feature touch into `DefaultUserDeletionService.runHardDelete` (one repository insert). 11 cron + integration tests; first production Sunday is the live smoke (tracked in `issues.md`).
+- Brief 6a — `chats.load.more` key seed (backend) + web swap. One translation key seeded in four locales, one component call site swapped.
+- Brief 6b — This Docs/QA close-out.
+
+**Reasoning.** The feature shipped end-to-end because the data model was right from the start — chats, sidecars, blocks, deterministic chatIds, separation of Firestore for realtime + Postgres for everything else. The bugs were all in the *implementation* against that correct foundation. A rewrite was considered (and rejected in this chat's Phase 1 discussion); patching the existing implementation cost less and inherited the worn-in handling of edge cases the audits did not flag.
+
+**Alternatives considered.** Full rewrite of `useChatStore` and the send flow — rejected per Phase 1 discussion; data model is sound, bugs are localized, rewrite cost is ~2-3× for an outcome that's contractually identical. Bundling the admin welcome chat (the "new user gets admin chat that can't be blocked or removed" idea) into this feature — rejected per intake discussion; it composes cleanly on top of the messaging data model and gets its own future Mastermind chat post-launch.
+
+**The closure gate** per conventions Part 3 and bootstrap §7: this Mastermind chat does not close until every drafted config-file edit produced in this chat has been applied to disk by Docs/QA. The Brief 6b application is the gate. Once Igor confirms commit, the chat closes; the next chat (the admin welcome chat, or the mobile catch-up, or something else) starts fresh.
+
+---
+
+## 2026-05-20 — Google Analytics v1 split into two features: Consent Mode v2 foundation, then GA4 instrumentation
+
+Two web audits (GA4 discovery, consent audit) surfaced that the existing cookie banner is structurally one step short of what Consent Mode v2 needs: two-category model (`necessary`, `preference`) instead of Google's four-signal shape; no SSR-aware default-consent emission; no Reject-all CTA; no anonymous re-entry to the banner; consent gates nothing in code today. GA4 v1 cannot ship until those gaps close.
+
+The work is therefore two features, executed in order: **Consent Mode v2** (`features/consent-mode-v2.md`) ships first as the foundation; **Google Analytics v1** (`features/google-analytics-v1.md`) ships second on top of it. Both specs are authored together so the GA4 contracts depending on consent decisions (cookie name, `ConsentData` shape, SSR snippet location) are locked at the same time the consent feature spec is locked.
+
+**Key decisions (10) folded into the two specs.**
+
+1. **Two features, consent first.** GA4 v1 is blocked on Consent Mode v2 shipping.
+2. **All four Consent Mode v2 signals modeled** (`analytics_storage`, `ad_storage`, `ad_user_data`, `ad_personalization`), with the three `ad_*` signals permanently `denied` per the Privacy Policy's no-marketing-pixels commitment. Modeling all four now means future marketing-tooling decisions don't need a schema migration.
+3. **Banner UX: twin Accept-all / Reject-all primaries with a Customize expander.** Regulator-defensible; current single "Accept selected" CTA replaced.
+4. **Footer "Manage cookie preferences" link reopens the same Drawer** rather than routing to a dedicated page. One source of truth for the consent decision.
+5. **Consent storage splits into its own `og_consent` cookie**, leaving `globalCookie` for non-consent prefs. SSR read becomes a single cookie read + parse rather than entangled with card-size and language. One-time client + SSR migration fallback for ~60 days reads the legacy `globalCookie.cookieConsent` if present; cleanup chore scheduled post-migration.
+6. **`sign_up` vs `login` discriminator** via a `wasRegister: boolean` returned from `syncUserToBackend`. Preserves the listener-is-sole-hydrator contract in `UseTokenRefresh.tsx`. Two alternatives rejected: firing `sign_up` from `registerUserFirebase` (would land without `user_id`); a parallel one-shot cell (duplicates state).
+7. **`select_promotion` dropped from v1.** Codebase has no promotion surface today; aspirational events in the schema confuse the next reader. Event returns when a promotion surface lands.
+8. **`page_view` does NOT fire on filter change.** Filter mutations on catalog/home produce URL changes via `router.replace`; firing `page_view` per slider drag would inflate the metric. A separate `filter_change` event is added to v1 in its place.
+9. **Stale `2026-05-19-oglasino-web-ga4-discovery-1.md`** in `oglasino-web/.agent/` ignored — Igor confirmed it's stale. Engineer's session counted as `<n>=2` per conventions Part 5 archive-pointer rule. The stale file is archived at GA4 v1 feature close by Docs/QA.
+10. **Card-size and language cookies move behind the `preference` category.** They are written today regardless of consent — a pre-existing gap the consent feature closes. Logged as a Risk Watch item in `state.md` and closed when consent ships.
+
+**Event set, v1.** Final composition is 12 events plus the automatic `page_view`: `sign_up`, `login`, `product_view`, `product_create_started`, `product_create_completed`, `contact_seller_clicked`, `message_sent`, `search`, `view_search_results`, `filter_change`, `exception`, `form_submit_failed`.
+
+**Cross-repo seams.** Consent: backend keeps the single-boolean `AuthUserDTO.allowPreferenceCookies` mirror; widens later only when a future feature needs server-side awareness of analytics consent. GA4: no backend changes; no Firestore Rules changes; no router-worker changes. Translation seeds for the consent feature follow the conventions Part 6 Rule 3 large-feature exception (18 keys × 4 locales in a dedicated SQL file).
+
+**Legal review handoff.** Both features include "Docs/QA notifies legal-drafts chat" in their definition-of-done. Consent ships with new Reject-all CTA, new category model, new footer entry point — privacy-policy-draft.md may need paragraph updates. GA4 ships with analytics processing live — same notification trigger.
+
+**Alternatives considered.**
+
+- One feature combining consent + GA4 (rejected — consent has user-visible UX and legal-surface implications independent of GA4; ships even if GA4 slips; bundling obscures decisions).
+- Analytics-only Consent Mode v2 signal model (rejected — locks in a schema change if marketing tooling ever lands).
+- Three banner CTAs visible at all times (rejected — clutters the banner; standard pattern is twin primary + customize expander).
+- Dedicated `/cookie-preferences` page (rejected — two surfaces showing the same data, drift risk).
+- Keep consent nested in `globalCookie` (rejected — bigger SSR parse on every request, mixed security posture, cookie name obscures intent).
+- Fire `sign_up` from `registerUserFirebase` directly at primitive completion (rejected — `useAuthStore.user` is null at that moment, so the event lands without `user_id`).
+- Keep `select_promotion` and instrument it on `ExtraProductsComponent` cards (rejected — those aren't promotions, stretching the term pollutes the analytics).
+- Fire `page_view` on every URL change including filter mutations (rejected — inflates session event count and skews engagement metrics).
+
+---
+
 ## 2026-05-19 — Backend → web cache revalidation: best-effort fire-and-forget pattern
 
 Backend POSTs `{"tags": ["user:<id>"]}` to web `/api/revalidate` after a user state transition commits, so other viewers of the affected profile see fresh `UserInfoDTO` inside the 5-minute SSR `revalidate: 300` window. Implemented via `UserStateChangedEvent` + `@TransactionalEventListener(AFTER_COMMIT, fallbackExecution = true)` + `DefaultWebRevalidationService`. Failure is logged and swallowed. Shared-secret header authentication (Option A) chosen over IP allowlist (Option B) or no-auth (Option C) because shared-secret is the simplest defensible model for server-to-server inside a hosted environment.

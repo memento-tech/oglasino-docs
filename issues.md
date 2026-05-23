@@ -4,10 +4,240 @@ Append-only log of out-of-scope findings. Newest at the top. Each entry has a da
 
 ---
 
-## 2026-05-19 — Registration `displayName` never persists to backend
+## 2026-05-23 — Create path missing `PRICE_REQUIRED` enforcement
 
 **Severity:** medium
 **Status:** open
+**Found in:** `oglasino-backend/src/main/java/com/memento/tech/oglasino/service/impl/DefaultProductService.java:125` (verbatim store), `:686` (`populateCategories` free-zone-only overwrite), `:825` (`updatePriceCurrency` throw, update-path only). Surfaced by the 2026-05-23 read-only backend audit ([`sessions/2026-05-23-oglasino-backend-price-required-create-gap-1.md`](sessions/2026-05-23-oglasino-backend-price-required-create-gap-1.md)).
+**Detail:** `DefaultProductService.createProduct` stores `request.getPrice()` verbatim at line 125. `populateCategories` (line 686) overwrites to `BigDecimal.ZERO` for free-zone categories but does not validate price for non-free-zone categories. The `PRICE_REQUIRED` throw at line 825 lives in `updatePriceCurrency`, which is called only from the update path. A client that bypasses the web Zod check at `oglasino-web/.../productValidator.ts:76–82` (mobile pre-adoption, curl, Postman, future flows) can create a product with `price = null, free = false`.
+
+Today's web wizard's Zod check is the only gate; nothing broken has reached the server through that surface. Whether any product was created with `price = null, free = false` historically is unverified — would require a DB query.
+
+**Trust-boundary verdict:** clean. The gap is a validation gap, not a trust-boundary violation. `price` is not used in moderation, authorization, or state-transition decisions.
+
+**Recommended fix (from the audit):** Option B — guard in `createProduct` between the `topCategory` resolve and the `populateCategories` call. ≤6 lines, one new test, no DTO change, no wire change, no translation change. Matches the update path's enforcement shape and the spec's 422 status code for `PRICE_REQUIRED`. Likely lands on `feature/validation-refactor` where the surrounding work has shipped.
+
+**Two adjacent observations recorded in the audit**, both downstream of this gap and both moot for new products once Option B lands; only relevant for historical malformed products if any exist:
+
+- `DefaultProductService.updatePriceCurrency:823` silently accepts null price on non-free-zone updates (the `if (source.getPrice() != null)` guard is intentional for partial updates, but means a malformed product cannot be repaired through the update path).
+- `DefaultProductService.isNoOpUpdate:327` treats two nulls as equal — a product persisted in the gap state remains persisted in the gap state on update with no validation surface.
+
+---
+
+## 2026-05-22 — Theme switcher should support 'system' option
+
+**Severity:** low
+**Status:** open
+**Found in:** `oglasino-web/src/components/client/buttons/ToggleButton.tsx`. Surfaced by the cookies-closing Mastermind chat closing pass (2026-05-22).
+**Detail:** Today the toggle in PortalConfigDialog is bi-state (light/dark); the underlying `next-themes` provider supports tri-state (light/dark/system). Adding 'system' to the UI is a separate UI decision unrelated to the cookie persistence work in cookies-closing Item 4. The future theme handoff (Path A, see [`.agent/handoffs/theme-path-a.md`](.agent/handoffs/theme-path-a.md)) replaces `next-themes` entirely — at that point the 'system' option can be folded in or kept out as a UI decision separate from the persistence work.
+
+---
+
+## 2026-05-22 — Product page `getBaseSiteServer()` null-guard latent issue
+
+**Severity:** low
+**Status:** open
+**Found in:** `oglasino-web/app/[locale]/(portal)/(public)/product/[productId]/[productName]/page.tsx`. Surfaced during cookies-closing Item 4 Brief 3b.
+**Detail:** `getBaseSiteServer()` returns `BaseSiteDTO | null`, but the product page accesses `baseSite.code` without a null check. Would throw `TypeError` if `getBaseSiteServer()` returns null (backend down, fetch error). Rare in practice. Pre-existing; not introduced by the cookies-closing work.
+
+---
+
+## 2026-05-22 — `generatePrivacyPageMetadata.ts` and `generateTermsPageMetadata.ts` pass compound routing locale as JSON-LD `inLanguage`
+
+**Severity:** low
+**Status:** open
+**Found in:** `oglasino-web/src/metadata/generatePrivacyPageMetadata.ts`, `oglasino-web/src/metadata/generateTermsPageMetadata.ts`. Surfaced during cookies-closing Item 4 Brief 3d.
+**Detail:** Both metadata generators pass the compound routing locale (`me-cnr`) as the JSON-LD `inLanguage` value. JSON-LD `inLanguage` expects BCP-47; `me-cnr` is not BCP-47. SEO consumers may ignore or fall back. Pre-existing. Fix: use `getTenantLocale(locale).locale` to produce `cnr-ME` (or equivalent BCP-47 tag).
+
+---
+
+## 2026-05-22 — `ForegroundPushInit.tsx` notification URL handling assumes unprefixed paths
+
+**Severity:** low
+**Status:** open
+**Found in:** `oglasino-web/src/components/client/ForegroundPushInit.tsx`. Surfaced during cookies-closing Item 4 Brief 3i.
+**Detail:** Migrated to the wrapped `useRouter` from `@/src/i18n/navigation` based on backend payload contract inspection. If the backend ever emits prefixed `data.navigate` URLs (e.g., already locale-prefixed), the wrapper will double-prefix and produce a broken navigation. Fix lives at the backend payload shape, not in the web UI.
+
+---
+
+## 2026-05-22 — `pathnameWithoutLocale(locale)` dead-check in protected layout
+
+**Severity:** low
+**Status:** open
+**Found in:** `oglasino-web/app/[locale]/(portal)/(protected)/layout.tsx`. Surfaced during cookies-closing Item 4 Brief 3d.
+**Detail:** The layout calls `pathnameWithoutLocale(locale)` expecting a pathname; passes a locale string instead. The check never matches, so the favicon-skip branch is dead code. Pre-existing; not introduced by the cookies-closing work.
+
+---
+
+## 2026-05-22 — `PortalConfigDialog.navigate` is declared async but never awaits
+
+**Severity:** low
+**Status:** open
+**Found in:** `oglasino-web/src/components/client/dialogs/PortalConfigDialog.tsx`. Surfaced during cookies-closing Item 4.
+**Detail:** The `navigate` helper is declared `async` but contains no `await` and is never awaited at call sites. No-op keyword; misleading to readers. Could be removed in any future PortalConfigDialog work.
+
+---
+
+## 2026-05-22 — `getPathname` exported from `src/i18n/navigation.ts` but unused
+
+**Severity:** low
+**Status:** open
+**Found in:** `oglasino-web/src/i18n/navigation.ts`. Surfaced during cookies-closing Item 4 navigation rewrite.
+**Detail:** Was unused before the navigation wrapper rewrite; remains unused after. Could be removed in a future cleanup. Kept export-symmetric with `createNavigation`'s shape for now.
+
+---
+
+## 2026-05-22 — `AppInit`'s `setLocale(locale)` uses empty deps array
+
+**Severity:** low
+**Status:** open
+**Found in:** `oglasino-web/src/components/client/AppInit.tsx`. Surfaced during cookies-closing Item 4 Brief 3d.
+**Detail:** `AppInit` invokes `setLocale(locale)` to populate `storedLocale` in `api.ts` but the effect's deps array is empty. If tenant or language changes without unmounting `AppInit`, `storedLocale` stays at the original value. Pre-existing; the typical mount lifecycle (AppInit lives at the app root) means it usually only runs once per navigation entry, masking the gap.
+
+---
+
+## 2026-05-22 — Two-redirect chain when cookie's lang is valid and URL's lang is invalid for tenant
+
+**Severity:** low
+**Status:** open
+**Found in:** `oglasino-web/proxy.ts`. Surfaced during cookies-closing Item 4 Brief 3e-bis.
+**Detail:** Visiting `/rs-cnr/...` with `cookie.lang='ru'` produces a two-hop redirect: `proxy.ts`'s invalid-locale branch redirects to `/rs-sr/...` first (tenant default), then cookie-wins redirects to `/rs-ru/...`. Each redirect is correct in isolation. Could be optimized to a single redirect by making the invalid-locale fallback cookie-aware (prefer the cookie's language if the tenant supports it, else fall back to tenant default).
+
+---
+
+## 2026-05-22 — `spring-boot-starter-mail` was an orphan dependency in `pom.xml` until the Brevo SMTP integration wired it up
+
+**Severity:** low
+**Status:** fixed (2026-05-22, session oglasino-backend-brevo-smtp-1)
+**Found in:** `oglasino-backend/pom.xml` lines 67-70 (managed by Spring Boot 4.0.6 parent, no explicit version).
+**Detail:** `spring-boot-starter-mail` had been declared in `pom.xml` with zero consumers across `src/`. Grep for `JavaMailSender`, `MimeMessage`, `SimpleMailMessage`, `spring.mail`, `smtp`, `brevo`, and `sendinblue` returned zero email-sending-related matches. Either added speculatively and never wired, or wired and reverted leaving the starter behind. The 2026-05-22 Brevo SMTP integration session made it load-bearing — the dependency was the right one to keep, no version change needed. Logged here for the record so a future engineer reading `pom.xml` history doesn't re-investigate the gap.
+
+---
+
+## 2026-05-21 — Portal home: `onIdTokenChanged` listener has no single-flight guard, causing duplicate `firebase-sync` + `push/token` POSTs on hard refresh
+
+**Severity:** medium
+**Status:** fixed (2026-05-21, session oglasino-web-usetokenrefresh-single-flight-1; manual verification by Igor)
+**Found in:** `oglasino-web/src/components/client/initializers/UseTokenRefresh.tsx`.
+**Detail:** Firebase's `onIdTokenChanged` listener emits twice on cold session restoration (persisted token, then refreshed token ~8 ms later). The listener callback fired `syncUserToBackend` + `initPushForAuthenticatedUser` independently for each emission, producing 2× `POST /api/auth/firebase-sync` and 2× `POST /api/secure/push/token` per hard refresh. Normal refresh fired one of each because the SDK did not re-emit on the warmer path. The "sole hydrator" contract from the Consent Mode v2 closing entry (`decisions.md` 2026-05-21) was intact; the gap was idempotency at the listener.
+
+> **Fix:** `useRef`-held `{ inFlightUid, lastSyncedUid, lastSyncedAt }` with a 2-second drop window for same-uid back-to-back emissions. `writeFirebaseTokenCookie(token)` hoisted into the listener so the cookie mirror runs on every emission (covers the rotated-token case even when the second backend sync is dropped). Guard resets on sign-out so sign-out → sign-in re-fires a fresh cascade. `lastSyncedAt` only set on success — failed syncs retryable immediately. `refreshUser` (the only non-listener caller of `syncUserToBackend`) untouched. Hard refresh now fires 1× firebase-sync + 1× push/token; normal refresh unchanged. Full context in `decisions.md` 2026-05-21 "Portal home cold-load cascade" entry.
+
+---
+
+## 2026-05-21 — Portal home: `randomSeed: Date.now()` in the `FilteredProductList` React key causes product-list remount and visible "jerk" on every SSR re-render
+
+**Severity:** medium
+**Status:** fixed (2026-05-21, session oglasino-web-filteredproductlist-random-seed-key-1)
+**Found in:** `oglasino-web/src/components/client/product/FilteredProductList.tsx`, `oglasino-web/src/lib/utils/filtersHelper.ts:45-48`.
+**Detail:** The no-filters home synthesizes `{ applyRandom: true, randomSeed: Date.now() }` on every SSR render. The inner `ProductList` was keyed on `JSON.stringify(filtersData)`, so a new seed → new key → React unmounts the previous list and mounts a fresh one with the new ordering. Visible product-order swap during load. Combined with the multiple-RSC-re-render bug (separate `issues.md` entry), each render produced its own visible swap.
+
+> **Fix:** destructure `randomSeed` out of the filters object before stringifying for the key calculation; the seed still reaches the backend via the unmodified `filtersData` on the request body. After the fix, seed changes do not cause remount; only real filter changes do. Locks the jerk out unconditionally regardless of how many SSR re-renders happen. Full context in `decisions.md` 2026-05-21 "Portal home cold-load cascade" entry.
+
+---
+
+## 2026-05-21 — Portal home: FilterManager SYNC TO URL trailing-slash false-positive + redundant `setTimeout(router.refresh)` causes 2 extra RSC re-renders per refresh
+
+**Severity:** medium
+**Status:** fixed (2026-05-21, session oglasino-web-filtermanager-refresh-fix-1)
+**Found in:** `oglasino-web/src/components/client/initializers/FilterManager.tsx`.
+**Detail:** Two independent root causes inside the SYNC TO URL effect. (1) The URL-canonicalization gate compared `newUrl` (built with a trailing slash for `pathname === '/'`) to `current` (browser URL with no trailing slash), so the gate fired on every refresh of `/rs-sr` even when no filters had changed. Only the home was affected — every other FilterManager-mounted route produces a non-`/` `pathname` and never had the bad trailing slash. (2) The gate's body called `router.replace(newUrl, { scroll: false })` followed by `setTimeout(() => router.refresh(), 0)`. In Next 16, `router.replace` to a new pathname already refetches RSC; the `setTimeout(refresh)` was leftover from an older Next version where `replace` did not consistently refetch. One firing of the gate → two RSC re-renders → two extra `POST /api/public/product/search` calls per visit.
+
+> **Fix:** Lever A — normalize the trailing slash in the `newUrl` construction so the gate evaluates `false` on the canonical no-filters home (no spurious `router.replace`). Lever B — delete the redundant `setTimeout(() => router.refresh(), 0)` line so legitimate filter-change triggers fire one RSC refetch instead of two. Both applied in one session. Hard refresh of `/rs-sr` dropped from 4 → 2 product-search POSTs; normal refresh dropped from 3 → 1. Other FilterManager-mounted routes scanned and confirmed unaffected by Lever A and improved by Lever B. Full context in `decisions.md` 2026-05-21 "Portal home cold-load cascade" entry.
+
+---
+
+## 2026-05-21 — `GlobalError` is the default-export function name in both `app/error.tsx` and `app/global-error.tsx`
+
+**Severity:** low
+**Status:** fixed (2026-05-23, session oglasino-web-google-analytics-v1-4)
+**Found in:** `oglasino-web/app/error.tsx:6`, `oglasino-web/app/global-error.tsx:6`. Surfaced by Phase 2 audit of `features/google-analytics-v1.md` (2026-05-21).
+**Detail:** Both files default-export a function literally named `GlobalError`. Next.js routes the two boundaries by filename (`error.tsx` is the route-level boundary, `global-error.tsx` is the app-level boundary), so the function name is cosmetic — runtime behaviour is unaffected. A future reader grepping for the global error boundary will hit two matches and have to disambiguate by file. The cleaner naming would be `RouteError` in `app/error.tsx` and `GlobalError` in `app/global-error.tsx`. Engineer flagged this under Part 4b at audit time as low severity, out of scope. Fold into the GA4 v1 brief that wires `trackError` into both boundaries — engineer renames `RouteError` while editing the file.
+
+> **Fix:** GA4 v1 Brief 8 renamed `app/error.tsx`'s default-export function from `GlobalError` to `RouteError` while wiring `trackError`. `app/global-error.tsx`'s function name stays `GlobalError` (intended end-state per this entry). Future readers grepping for the global error boundary now hit exactly one match in `app/global-error.tsx`.
+
+---
+
+## 2026-05-21 — Mastermind drafted RU translation copy that diverged from established codebase convention
+
+**Severity:** low (process error, caught by the engineer)
+**Status:** fixed (engineer aligned to codebase convention)
+**Found in:** Consent Mode v2 brief A.
+**Detail:** Brief A's RU translation drafts dropped the `kh` digraph and apostrophe-soft-sign rendering that brief 8 explicitly established as the codebase's RU transliteration convention. Engineer caught the contradiction in pre-flight Brief vs reality and aligned the new rows to existing `category.necessary.*` values.
+
+**Lesson:** when drafting translation copy that should "mirror" existing seeded copy, read the existing rows first and quote them verbatim rather than re-drafting and hoping the drafts match.
+
+---
+
+## 2026-05-21 — Mastermind misread conventions Part 6 Rule 3 dedicated-file exception
+
+**Severity:** low (process error, caught mid-session by the engineer)
+**Status:** fixed (process correction)
+**Found in:** Consent Mode v2 brief 8.
+**Detail:** Brief 8 framed Rule 3's dedicated-file exception as applicable to "20 keys in one namespace" on the reasoning that practical pain applied equally. The exception is strictly multi-namespace; single-namespace seeds default to inline-append regardless of key count. The engineer initially followed Mastermind's recommendation, then reversed after Igor's mid-session correction.
+
+**Lesson:** when invoking a conventions exception, quote the rule verbatim before applying it. Paraphrasing the rule and arguing the paraphrase fits is the same smell as the cross-repo "scoped one-time exception" error.
+
+---
+
+## 2026-05-21 — Mastermind drafted a cross-repo brief that violated conventions Part 3
+
+**Severity:** low (process error, caught at the engineer level; no code shipped)
+**Status:** fixed (process correction)
+**Found in:** Consent Mode v2 brief 8.
+**Detail:** Brief 8 was drafted to cover both backend SQL seeds and a one-line web translation-key swap. Conventions Part 3 has no scoped-one-time exception for cross-repo edits. The backend engineer correctly refused the web portion. Brief 8 ran as backend-only; the web swap was routed as brief 8b.
+
+**Lesson:** Phase 5 briefs that touch more than one repo must split. "Convince yourself the rule is OK to break this once" is a smell — conventions only change via decisions.md.
+
+---
+
+## 2026-05-20 — `TestCreateJSON.java` is an anonymous public endpoint triggering catalog-JSON regeneration
+
+**Severity:** medium
+**Status:** open
+**Found in:** `oglasino-backend` — `src/main/java/com/memento/tech/oglasino/controller/test/TestCreateJSON.java`. Surfaced by the messaging feature's Brief 4 backend engineer as an adjacent observation.
+**Detail:** `TestCreateJSON.java` lives in `src/main/java`, registers `GET /api/public/filter_gen/init` (anonymous, permitAll), and triggers `CatalogToJsonService.createJSONForAllBaseSites()` — a side-effecting catalog-JSON regeneration job. Not body-controlled like the `/api/public/notification/test` endpoint that the messaging feature deleted (Brief 4 B2), but functionally similar: an anonymous trigger for an expensive backend job.
+
+Pre-launch posture per Igor: production deploy is imminent. The endpoint as-is is an unauthenticated trigger for catalog regeneration; an attacker hitting it repeatedly could cost CPU and storage I/O on the backend.
+
+**Fix path:** either (a) gate behind `@Profile("dev")` if the endpoint is only useful in dev workflows, (b) move to `/api/secure/admin/**` with `@PreAuthorize("hasRole('ADMIN')")` if admins need it in production, or (c) delete entirely if no workflow uses it. Determine actual usage before deciding.
+
+Separate one-shot bug-fix brief, post-messaging-launch.
+
+---
+
+## 2026-05-20 — Brief 5 cleanup cron smoke not run on dev; first production Sunday is the live test
+
+**Severity:** low
+**Status:** open
+**Found in:** `oglasino-backend` — `src/main/java/com/memento/tech/oglasino/messaging/service/impl/DefaultMessagingCleanupService.java`; messaging feature Brief 5 (2026-05-20).
+**Detail:** The Sunday cleanup cron from the messaging feature was implemented and unit-tested (11 tests, all green, Mockito-mocked Firestore). The end-to-end path — Postgres hard-delete writes a `pending_chat_cleanup` row → `@Scheduled` cron fires → row is read → Firestore Admin SDK scans `chats` where `users` array-contains the deleted uid → chat-root `users[]` and per-message `senderId`/`receiverId` are anonymised to `"deleted:<uid>"` → `userchats/`, `userblocks/`, `userblocksReverse/` are deleted → queue row is removed — was not exercised against live Firestore on dev before the feature closed.
+
+Options considered for pre-launch live verification: (A) temporarily set `messaging.cleanup.cron` to a high-frequency expression in `application-dev.yaml`, hard-delete a test user, observe the full path, revert. (B) defer to the first production Sunday at 03:00 UTC. (C) add a dev-only manual-trigger endpoint. Igor chose (B) — unit-test coverage is thorough enough that the integration risk is bounded, and the first production Sunday is itself the live test.
+
+**Risk:** if the live Admin SDK behaviour differs from the Mockito stubs (e.g. `whereArrayContains` returning a `QuerySnapshot` shape the code doesn't anticipate, or a `batch.update(docRef, field, value)` overload mismatch), the cron will fail on its first Sunday production run. Per-user failure mode is logged, the queue row stays in place, and `attempt_count` increments, so the failure is recoverable (the next Sunday retries after the fix lands). The blast radius is bounded by the cron's per-user try/catch and the singleton job-lock.
+
+**What to do:** on the first Sunday at 03:00 UTC after production deployment of the messaging feature, monitor backend logs for the `DefaultMessagingCleanupService` cron-start log line. If the first run produces ERROR-level entries with per-user firebaseUid identifiers, retrieve a sample of those identifiers and check whether the corresponding chat documents in Firestore have their `users[]` arrays anonymised. If the cron ran clean (INFO summary log with successCount > 0 or "no pending rows"), close this entry as `fixed`. If the cron produced ERRORs, open a bug-chat to debug against the live Admin SDK shape.
+
+If the launch produces no hard-deletions before the first Sunday (likely for the launch period), the cron's first real exercise is whenever the first hard-deleted user reaches the queue. Adjust the watch window accordingly.
+
+---
+
+## 2026-05-20 — Edit-profile `displayName` change is silently dropped server-side
+
+**Severity:** medium
+**Status:** fixed (2026-05-20, session oglasino-backend-registration-displayname-1)
+**Found in:** `oglasino-backend/src/main/java/com/memento/tech/oglasino/facade/impl/DefaultUserFacade.java` (`updateCurrentUserData`); `oglasino-backend/src/main/java/com/memento/tech/oglasino/dto/UpdateUserDTO.java`.
+**Detail:** `UpdateUserDTO` declared `@NotBlank private String displayName;` and the controller `POST /api/secure/user/update` validated it via `@Valid`, but `DefaultUserFacade.updateCurrentUserData` never copied the value onto the loaded `User` entity — the field was parsed, validated, then silently discarded. Any user editing their displayName via the profile flow got a 200 OK while the server kept the original. Discovered during the 2026-05-20 backend audit for the registration `displayName` persistence fix.
+
+> **Fix:** added `user.setDisplayName(updateData.getDisplayName())` to `DefaultUserFacade.updateCurrentUserData` alongside the existing setEmail/setProfileImageKey/etc. block. `UpdateUserDTO.displayName` validation tightened from bare `@NotBlank` to `@NotBlank + @Size(2, 60) + @Pattern("^[\\p{L} ]+$")` to match the registration contract. Cache plumbing inherits from `userService.saveUser`'s existing `@CacheEvict` set. Same session as the registration fix.
+
+---
+
+## 2026-05-19 — Registration `displayName` never persists to backend
+
+**Severity:** medium
+**Status:** fixed (2026-05-20, sessions oglasino-backend-registration-displayname-1 + oglasino-web-registration-displayname-1)
 **Found in:** `oglasino-web/src/lib/store/useAuthStore.ts` (register action); `oglasino-web/src/lib/service/reactCalls/authService.ts` (registerUserFirebase); `oglasino-backend` firebase-sync handler.
 **Detail:** Registration form collects `displayName`, but it never reaches Firebase Auth, Firestore, or the backend's `users` row. The pre-existing flow created a Firebase user via `createUserWithEmailAndPassword(email, password)` (no displayName), POSTed `{ allowPreferenceCookies }` to firebase-sync (no displayName), then patched the in-memory DTO with the form value before storing. The patching gave the UI a few-second illusion of "looks right" before the next sync overwrote it.
 
@@ -19,18 +249,22 @@ Architecture: backend as source of truth aligns with how `displayName` changes a
 
 Out of scope for this feature (registration is its own surface). Schedule as a separate brief post-launch or whenever a registration-pass is scheduled.
 
+> **Fix:** Backend — `LoginRequest` gained a `displayName` field. Validation is `@Size(min = 2, max = 60)` + `@Pattern("^[\\p{L} ]+$")` (Unicode letters and spaces only). `@NotBlank` was deliberately NOT added because `/auth/firebase-sync` is called on every login and token refresh, not only on register; the existing `resolveDisplayName(token)` chain handles the no-displayName case (OAuth providers populate `token.getName()`; email+password edge case falls back to email local-part). `DefaultFirebaseAuthService.createUserSynchronized` prefers `loginRequest.getDisplayName()` when non-blank, else falls back. Column folded `varchar(255)` → `varchar(60)`. Three new `ERRORS` keys seeded across 4 locales. Web — `useAuthStore.register` passes `displayName` through `registerUserFirebase` to a module-scoped one-shot cell consumed once by the listener's next `syncUserToBackend` call. Listener-is-sole-hydrator contract preserved. Register and edit-profile forms now mirror the backend validation (trim + size + pattern). Dead `displayName` field removed from the Firestore `users/<uid>` write and from the `FirestoreUser` type. 538 backend tests + 154 web tests green.
+
 ---
 
 ## 2026-05-19 — Admin Users detail page indicators stale after in-page ban/unban toggle
 
 **Severity:** low (cosmetic)
-**Status:** open
+**Status:** fixed (2026-05-20, session oglasino-web-admin-user-detail-disabled-lift-1)
 **Found in:** `oglasino-web/app/[locale]/admin/users/[userId]/page.tsx`; `oglasino-web/src/components/admin/users/EnableDisableButton.tsx`.
 **Detail:** The detail page renders state indicators from initial-fetch `userData.disabled`. When an admin toggles ban/unban via the `EnableDisableButton` on the same page, the button's local `disabled` state flips and its icon swaps, but the page's `userData.disabled` is not lifted to a shared source. The new "Banned" badge does not appear until the page is refetched or re-navigated.
 
 **Fix path:** mirror the list-page `UserRow` pattern — lift `disabled` (and `lockedFromDeletion` if a lock toggle is added here later) to page state, add an optional `onDisabledChange` callback to `EnableDisableButton` matching `EnableDisableIcon`'s controlled-mode contract.
 
 Out of scope for the indicator-only brief that surfaced it.
+
+> **Fix:** `app/[locale]/admin/users/[userId]/page.tsx` now owns a `disabled` `useState`, seeded inside the existing fetch effect from `data.disabled` at the same time as `setUserData`. A `displayUser: UserDetailsDTO = { ...userData, disabled }` is passed to `UserStateIndicators` and `EnableDisableButton`, and `hasStateIndicator` is derived from the lifted value. `EnableDisableButton` gained an optional `onDisabledChange?: (next: boolean) => void` prop matching the `EnableDisableIcon` controlled-mode contract; the callback fires inside `handleSuccess` (success branch only) immediately after the internal `setDisabled`. Backwards-compatible: existing callers without the prop are unchanged. `lockedFromDeletion` was deliberately not lifted because no toggle for it exists on this page today; if a lock toggle is added later, the same lifting shape applies. `tsc`/`lint`/`test`/`prettier` clean.
 
 ---
 
@@ -46,6 +280,7 @@ Out of scope for the indicator-only brief that surfaced it.
 **Verification needed:** confirm direct-Vercel-URL works in production. Two failure modes possible: (a) Vercel deployment URL changes per environment (preview vs prod) and breaks if not maintained; (b) backend's HTTP client treats the direct hostname differently (TLS, redirect handling, etc.) than the worker-fronted hostname.
 
 **Alternative architectural fixes** (if direct-URL proves fragile):
+
 - Add `/api/revalidate` as a Cloudflare worker exception that routes to Vercel
 - Rename the frontend endpoint to a non-`/api/*` path (`/_revalidate` or `/internal/revalidate`)
 - Use a separate internal domain
@@ -107,43 +342,51 @@ Fix scope: zero code work pending. This entry tracks the verification gap; close
 **Severity:** medium
 **Status:** open
 **Found in:** `oglasino-web/src/lib/service/nextCalls/userService.ts:13-19` (the `getUserForId` call), `oglasino-web/src/lib/config/fetchApi.ts:15-19, 38-45` (the `skipAuth` semantics), and the consumer at `oglasino-web/src/components/client/UserDetails.tsx:119` (`isFollowing={userDetails.isFollowingCurrent}` passed to `FollowUserButton`).
-**Detail:** Server-side `getUserForId` fetches `/public/user?id=<id>` with `skipAuth: true`. Per the `fetchApi.ts` documentation comment, `skipAuth: true` explicitly bypasses the `cookies()` call AND the Firebase Bearer header — so the backend cannot identify the requesting viewer on this code path. Yet the returned `UserInfoDTO` carries two viewer-dependent boolean fields, `iamActive` and `isFollowingCurrent`, both of which require knowing who is asking to populate correctly. `iamActive`'s consequence is mitigated in `UserDetails.tsx:53-59` by an internal client-side recomputation against `useAuthStore.user.id`; `isFollowingCurrent` has no such mitigation — it is passed straight into `<FollowUserButton isFollowing={userDetails.isFollowingCurrent} />` (`UserDetails.tsx:119`), which uses it as the seed for its local `following` state. Observable consequence: a signed-in viewer who already follows User X opens `/user/<X-id>` (or any `/product/<…>` owned by X) and sees the Follow icon (UserPlus) instead of the Unfollow icon (UserMinus). One click then *unfollows* them, contrary to the user's mental model. Compounding: there is no `revalidateTag('user:${userId}')` call anywhere downstream of `markFollowUser`, so the cached `UserInfoDTO` (Next.js Data Cache, 5-minute `revalidate` with tag `user:${userId}` per `userService.ts:17-18`) does not refresh after a follow action either. Fix scope: either split `getUserForId` into a public-skipAuth path that omits the viewer-dependent fields and an authenticated path that does forward auth (matching the `/public/*` vs `/secure/*` split the backend already has), or drop `isFollowingCurrent` from this public endpoint and seed the button via a separate small auth-required call, or compute the field client-side post-mount via a Zustand follows-store. Project-wide implications similar to `useAuthResolved`-style hydration handling — likely its own focused chat. Found by Docs/QA during the QA-Preparation `follow-flow` topic authoring.
+**Detail:** Server-side `getUserForId` fetches `/public/user?id=<id>` with `skipAuth: true`. Per the `fetchApi.ts` documentation comment, `skipAuth: true` explicitly bypasses the `cookies()` call AND the Firebase Bearer header — so the backend cannot identify the requesting viewer on this code path. Yet the returned `UserInfoDTO` carries two viewer-dependent boolean fields, `iamActive` and `isFollowingCurrent`, both of which require knowing who is asking to populate correctly. `iamActive`'s consequence is mitigated in `UserDetails.tsx:53-59` by an internal client-side recomputation against `useAuthStore.user.id`; `isFollowingCurrent` has no such mitigation — it is passed straight into `<FollowUserButton isFollowing={userDetails.isFollowingCurrent} />` (`UserDetails.tsx:119`), which uses it as the seed for its local `following` state. Observable consequence: a signed-in viewer who already follows User X opens `/user/<X-id>` (or any `/product/<…>` owned by X) and sees the Follow icon (UserPlus) instead of the Unfollow icon (UserMinus). One click then _unfollows_ them, contrary to the user's mental model. Compounding: there is no `revalidateTag('user:${userId}')` call anywhere downstream of `markFollowUser`, so the cached `UserInfoDTO` (Next.js Data Cache, 5-minute `revalidate` with tag `user:${userId}` per `userService.ts:17-18`) does not refresh after a follow action either. Fix scope: either split `getUserForId` into a public-skipAuth path that omits the viewer-dependent fields and an authenticated path that does forward auth (matching the `/public/*` vs `/secure/*` split the backend already has), or drop `isFollowingCurrent` from this public endpoint and seed the button via a separate small auth-required call, or compute the field client-side post-mount via a Zustand follows-store. Project-wide implications similar to `useAuthResolved`-style hydration handling — likely its own focused chat. Found by Docs/QA during the QA-Preparation `follow-flow` topic authoring.
 
 ---
 
 ## 2026-05-17 — `/owner/follows` `UserCard` calls `notify.error()` for both success and failure paths
 
 **Severity:** low
-**Status:** open
+**Status:** fixed (2026-05-20, session oglasino-web-follow-result-shape-1)
 **Found in:** `oglasino-web/src/components/owner/follows/UserCard.tsx:19-33`.
 **Detail:** The `onUnfollow` handler in `UserCard` has two branches based on the `markFollowUser` result. The `result === undefined` branch (line 21-25) calls `notify.error()` and is dead code — `markFollowUser` always returns a `boolean` (`followService.ts:8,12,15`), never `undefined`. The other branch (line 26-31), explicitly meant for the success case (`tCommon(result ? 'user.follow.added' : 'user.follow.removed')`), also calls `notify.error()` instead of `notify.success()`. Result: every unfollow action from the owner dashboard toasts in the error/red style even when the operation committed successfully. Trivial wording fix — switch the success branch to `notify.success()` and drop the dead `undefined` branch (or repurpose it to call `notify.error` for a real error path returned by a future revision of `markFollowUser`). Found by Docs/QA during the QA-Preparation `follow-flow` topic authoring.
+
+> **Fix:** `markFollowUser` widened to `Promise<{ ok: true; following: boolean } | { ok: false }>`; both consumers (`UserCard.tsx`, `FollowUserButton.tsx`) now branch on `result.ok` and surface `notify.error` on HTTP failure. No new translation seed rows authored — both call sites use `review.system.1` as the generic-system-error fallback. A follow-up session (`oglasino-web-follow-button-failure-unblock-1`, 2026-05-20) also released the 2-second `setBlocked` debounce synchronously on the failure branch so the user can retry immediately without waiting on a server-state-unchanged debounce; the 2-second debounce on success is unchanged.
 
 ---
 
 ## 2026-05-17 — `/owner/follows` `UserCard` does not remove the unfollowed row from the list
 
 **Severity:** low
-**Status:** open
+**Status:** fixed (2026-05-20, session oglasino-web-follows-row-removal-1)
 **Found in:** `oglasino-web/src/components/owner/follows/UserCard.tsx:19-33` (the handler) and `oglasino-web/app/[locale]/owner/follows/page.tsx:75-91` (the consumer that owns the list state).
-**Detail:** `UserCard.onUnfollow` calls `markFollowUser` and fires a toast but does not update the parent `followsUsers` state. The card stays visible in the list with its "Unfollow" button still active and labelled — clicking it again *re-follows* the user (because the underlying endpoint is a toggle: first call adds, second call removes, etc.). The list only re-aligns with reality after a manual page reload or a `loadMore` call against the backend. Owner sees a stale list with confusing toggle semantics. Fix scope: pass a parent callback into `UserCard` (or call a parent-supplied filter) that removes the row from `followsUsers.users` on a successful unfollow response. Related to the dead-row-state class of bug; same root pattern as the `/owner/follows` UI not auto-refreshing. Found by Docs/QA during the QA-Preparation `follow-flow` topic authoring.
+**Detail:** `UserCard.onUnfollow` calls `markFollowUser` and fires a toast but does not update the parent `followsUsers` state. The card stays visible in the list with its "Unfollow" button still active and labelled — clicking it again _re-follows_ the user (because the underlying endpoint is a toggle: first call adds, second call removes, etc.). The list only re-aligns with reality after a manual page reload or a `loadMore` call against the backend. Owner sees a stale list with confusing toggle semantics. Fix scope: pass a parent callback into `UserCard` (or call a parent-supplied filter) that removes the row from `followsUsers.users` on a successful unfollow response. Related to the dead-row-state class of bug; same root pattern as the `/owner/follows` UI not auto-refreshing. Found by Docs/QA during the QA-Preparation `follow-flow` topic authoring.
+
+> **Fix:** added a required `onUnfollowSuccess: (userId: number) => void` prop on `UserCard`. The callback fires only on `result.ok === true && result.following === false` (the genuine unfollow case). Parent (`app/[locale]/owner/follows/page.tsx`) implements `handleUnfollowSuccess` which filters the unfollowed user out of `followsUsers.users` and decrements `followsUsers.totalNumberOfUsers`, mirroring the spread-into-new-object setState shape that `loadMore` already uses. `hasMore = users.length < totalNumberOfUsers` continues to compute correctly post-removal because both sides decrement by 1. Toast still fires unchanged. Lint/tsc/test clean.
 
 ---
 
 ## 2026-05-17 — Start-Message product context (`tempProductReason`) cleared on MessageInput mount, drops `productId` from the first message
 
 **Severity:** medium
-**Status:** open
+**Status:** fixed (2026-05-20, messaging feature Brief 2, sessions oglasino-web-messaging-1 + smoke confirmed)
 **Found in:** `oglasino-web/src/messages/components/MessageInput.tsx:57-68` (consumer) and `oglasino-web/src/messages/store/useChatStore.ts:499-501, 516-518, 575-578` (producer + intended cleanup site).
-**Detail:** When a user starts a conversation from a product page via `StartMessageButton`, the store action `setTempProductReason(product)` records the originating product so that the first `MessageRequest` written to Firestore can carry its `productId`. `MessageInput`'s mount `useEffect` reads `tempProductReason` to compose the `initial.product.message` suggestion text, then immediately calls `setTempProductReason(undefined)` — clearing the store field *before* the user types and sends. By the time `useChatStore.sendMessage` runs and checks `if (state.tempProductReason) { messageRequest.productId = state.tempProductReason.id; }`, the field is already `undefined`, so `productId` is silently dropped from the first message of every product-path conversation. The store's own end-of-send cleanup (`set({ tempReceiver: null, tempProductReason: null })` at `useChatStore.ts:575-578`) further confirms the intent was for the clear to happen on send, not on mount. Visible symptom: every conversation initiated via a product page lacks the originating-product link in its first message — any consumer of `MessageRequest.productId` (audit, "this chat started about Product X" surfacing, analytics) sees no data. The text prefill itself still works because `MessageInput`'s `suggestion` is stored in local state. Fix scope: move the `setTempProductReason(undefined)` call out of `MessageInput`'s mount effect; rely on the store's existing post-send cleanup in `sendMessage` instead. Found by Docs/QA during the QA-Preparation `start-message-flow` topic authoring.
+**Detail:** When a user starts a conversation from a product page via `StartMessageButton`, the store action `setTempProductReason(product)` records the originating product so that the first `MessageRequest` written to Firestore can carry its `productId`. `MessageInput`'s mount `useEffect` reads `tempProductReason` to compose the `initial.product.message` suggestion text, then immediately calls `setTempProductReason(undefined)` — clearing the store field _before_ the user types and sends. By the time `useChatStore.sendMessage` runs and checks `if (state.tempProductReason) { messageRequest.productId = state.tempProductReason.id; }`, the field is already `undefined`, so `productId` is silently dropped from the first message of every product-path conversation. The store's own end-of-send cleanup (`set({ tempReceiver: null, tempProductReason: null })` at `useChatStore.ts:575-578`) further confirms the intent was for the clear to happen on send, not on mount. Visible symptom: every conversation initiated via a product page lacks the originating-product link in its first message — any consumer of `MessageRequest.productId` (audit, "this chat started about Product X" surfacing, analytics) sees no data. The text prefill itself still works because `MessageInput`'s `suggestion` is stored in local state. Fix scope: move the `setTempProductReason(undefined)` call out of `MessageInput`'s mount effect; rely on the store's existing post-send cleanup in `sendMessage` instead. Found by Docs/QA during the QA-Preparation `start-message-flow` topic authoring.
+
+> **Fix:** Brief 2 W1 renamed `tempProductReason` → `tempProductContext` across `useChatStore`, `ChatStore` type, and consumers; W2 removed the premature `setTempProductContext(undefined)` mount effect in `MessageInput.tsx`; W3 reads the captured context synchronously at the top of `sendMessage` and includes `productId` on the message write. Smoke-verified end-to-end on 2026-05-20 — first message of a new product-page-initiated conversation lands with `productId` set in the Firestore message document.
 
 ---
 
 ## 2026-05-17 — Hardcoded Serbian "Kategorije iz <X>" breadcrumb button label
 
 **Severity:** low
-**Status:** open
+**Status:** fixed (2026-05-20, session oglasino-backend-breadcrumb-translation-seed-1 + Igor web swap)
 **Found in:** `oglasino-web/src/components/server/OglasinoBreadcrumbs.tsx:81`
-**Detail:** The "jump into subcategories" button rendered at the tail of a breadcrumb chain (when the chain has ≤ 2 levels) uses the literal Serbian string `Kategorije iz {t(category.labelKey)}` instead of a next-intl key — EN / RU / ME visitors see Serbian. A Part 6 (translations) violation in `oglasino-web` source, same family as the existing 2026-05-14 *Hardcoded Serbian tooltips on the product detail page* entry. Found by Docs/QA during the QA-Preparation `category-navigation` topic authoring.
+**Detail:** The "jump into subcategories" button rendered at the tail of a breadcrumb chain (when the chain has ≤ 2 levels) uses the literal Serbian string `Kategorije iz {t(category.labelKey)}` instead of a next-intl key — EN / RU / ME visitors see Serbian. A Part 6 (translations) violation in `oglasino-web` source, same family as the existing 2026-05-14 _Hardcoded Serbian tooltips on the product detail page_ entry. Found by Docs/QA during the QA-Preparation `category-navigation` topic authoring.
+
+> **Fix:** `breadcrumb.categories_from.label` seeded in the `NAVIGATION` namespace across all four locale files (EN id 2543, RS 4643, RU 6743, CNR 443). Web swap (`OglasinoBreadcrumbs.tsx:81` literal → `useTranslations` lookup) applied by Igor directly.
 
 ---
 
@@ -204,9 +447,11 @@ Fix scope: zero code work pending. This entry tracks the verification gap; close
 ## 2026-05-16 — Global header search input has no Enter-key submission handler
 
 **Severity:** medium
-**Status:** open
+**Status:** fixed (2026-05-20, session oglasino-web-header-search-enter-1)
 **Found in:** `oglasino-web/src/components/client/SearchInput.tsx:134-141`
 **Detail:** The `<Input>` rendering the global header search has no `onKeyDown` handler and is not wrapped in a `<form>`, so pressing Enter while focused in the input does nothing — no submit, no popup open, no navigation. The only path that persists a typed term into the destination listing page's `searchText` chip and URL is clicking the submit button at the bottom of the autocomplete dropdown (same file, lines 164-194), and that button only renders when the autocomplete returned at least one product. Users almost universally try Enter first; the dead key reads as "search is broken" in a way that's hard to diagnose without reading the component. Affects all three scopes (portal, owner dashboard, admin) — the same `SearchInput` is reused via `SelectableSearchInputWrapper`. Cross-referenced from the `global-header-search` QA topic as a "Known issue" pitfall; the topic's `qaChecklist` includes a standing check that pins current behaviour and will need flipping when this is fixed. Found by Docs/QA during the QA-Preparation `global-header-search` topic authoring (2026-05-16).
+
+> **Fix:** `SearchInput.tsx` extracts a `commitSearch(rawTerm)` helper and adds an `onKeyDown` handler on the global `<Input>` that, on `Enter`, trims `term`, no-ops on whitespace-only input, and otherwise calls `commitSearch(trimmed)`. The autocomplete submit button now also routes through `commitSearch(debouncedTerm)`. The fix applies uniformly to portal, owner dashboard, and admin scopes (shared component via `SelectableSearchInputWrapper`). Note: the standing "Known issue" pitfall and `qaChecklist` item on the `global-header-search` QA topic in `oglasino-docs/features/qa-preparation.md`-derived content (`topics.ts`) now describe stale behavior — the pitfall and the standing-check both need flipping in a follow-up Docs/QA session. Not in scope for this brief.
 
 ---
 
@@ -231,18 +476,22 @@ Fix scope: zero code work pending. This entry tracks the verification gap; close
 ## 2026-05-16 — Three `-Xlint` compile warnings in `oglasino-backend`, pre-existence unverified
 
 **Severity:** low
-**Status:** open
+**Status:** fixed (2026-05-20, session oglasino-backend-xlint-warnings-1)
 **Found in:** `oglasino-backend` — `src/main/java/com/memento/tech/oglasino/admin/internal/controller/AppVersionController.java`, `src/main/java/com/memento/tech/oglasino/elasticsearch/service/impl/ProductIndexer.java`, `src/test/java/com/memento/tech/oglasino/exception/GlobalExceptionHandlerTest.java`
 **Detail:** `./mvnw clean compile` and `./mvnw test` emit three `-Xlint` notices: deprecated-API use in `AppVersionController` and `GlobalExceptionHandlerTest`, unchecked/unsafe operations in `ProductIndexer`. Surfaced during the 2026-05-16 dependency-upgrade session (`firebase-admin 9.8.0 → 9.9.0`, AWS SDK 2.42 → 2.44, `postgresql` 42.7.10 → 42.7.11). The session did not capture a pre-upgrade baseline, so it cannot prove these are pre-existing — but none of the three files reference Firebase Admin or AWS SDK classes by name, suggesting they are pre-existing codebase notices unrelated to the upgrade. **Recommended quick check:** a `-Xlint:deprecation,unchecked` compile on a fresh checkout of the pre-upgrade `pom.xml` would confirm pre-existence cheaply. If pre-existing, normal cleanup; if newly-surfaced, one of the upgraded SDKs is implicated.
+
+> **Fix:** verified all three warnings pre-existed the 2026-05-16 dependency upgrade by checking out the pre-upgrade pom (commit `5df54c9`) via `cp`, running `clean compile` and `clean test-compile`, grepping each named file in the logs, then restoring the pom (verified byte-identical via `diff`). `AppVersionController.java`: `Version.valueOf` / `lessThan` swapped to `Version.parse` / `isLowerThan` (non-deprecated semver4j API). `ProductIndexer.java`: raw `Map.class` deserialisation tightened to `TypeReference<Map<String, Object>>()` so the parameterised type is preserved end-to-end through `IndexOperations.create(Map<String, Object>)`. `GlobalExceptionHandlerTest.java`: three method-level `@SuppressWarnings("deprecation")` annotations added with explanatory comment — narrow-scope suppression chosen because swapping the test to `HttpStatus.UNPROCESSABLE_CONTENT` while production `ProductErrorCode` still constructs `UNPROCESSABLE_ENTITY` would compare two distinct enum instances and fail. The suppressions should come out as part of the future coordinated `UNPROCESSABLE_ENTITY → UNPROCESSABLE_CONTENT` sweep. Post-fix `./mvnw clean compile` and `./mvnw clean test-compile` show zero matches for the three named files. `./mvnw spotless:check` and `./mvnw test` (502 passing) green.
 
 ---
 
 ## 2026-05-16 — Verify whether `opentelemetry-semconv` pin remains necessary post-Firebase-upgrade
 
 **Severity:** low
-**Status:** open
+**Status:** fixed (2026-05-20, verified by Igor directly)
 **Found in:** `oglasino-backend/pom.xml` — `<dependencyManagement>` `io.opentelemetry.semconv:opentelemetry-semconv 1.41.1`
 **Detail:** The pin was added on 2026-05-15 because `firebase-admin → google-cloud-storage` was pulling in `opentelemetry-semconv 1.29.0-alpha`, which lacked `DbAttributes` and caused Elasticsearch client startup failure (see 2026-05-15 entry, status `fixed`). On 2026-05-16, `firebase-admin` was upgraded 9.8.0 → 9.9.0 (transitively pulling `google-cloud-storage` 2.63.0 → 2.64.0). `dependency:tree` on both before and after resolves `opentelemetry-semconv` to `1.41.1` — but that's the effective post-mediation version, dominated by the pin. The real question — whether Maven would still mediate to `1.29.0-alpha` without the pin — needs `./mvnw dependency:tree -Dverbose=true` on the post-upgrade pom to surface omitted candidates. **If the verbose output no longer shows `1.29.0-alpha` in the candidate set, the pin is redundant and can be removed.** If `1.29.0-alpha` is still in the set, the pin remains load-bearing. Cheap to run in one read-only session.
+
+> **Fix:** verified by Igor directly. Pin disposition recorded as resolved.
 
 ---
 
@@ -258,9 +507,11 @@ Fix scope: zero code work pending. This entry tracks the verification gap; close
 ## 2026-05-15 — `printStackTrace()` instead of logger in GlobalIndexerService
 
 **Severity:** low
-**Status:** open
+**Status:** fixed (2026-05-20, session oglasino-backend-global-indexer-logger-1)
 **Found in:** `oglasino-backend` — `src/main/java/com/memento/tech/oglasino/elasticsearch/service/impl/GlobalIndexerService.java:29`
 **Detail:** Per-indexer failures during boot reindex are printed via `ex.printStackTrace()` instead of using the project's logger. Conflicts with conventions Part 4 ("No `System.out.println`... Logger calls fitting the existing logging strategy are fine"). Diagnostic-output style only; no user-visible impact.
+
+> **Fix:** replaced `ex.printStackTrace()` at `GlobalIndexerService.java:29` with `log.error("Boot reindex failed for {}", controller.getClass().getSimpleName(), ex)`. Added the `private static final Logger log = LoggerFactory.getLogger(...)` field plus the two SLF4J imports, matching the dominant vanilla-SLF4J pattern used by sibling files in the same package (`ProductIndexer`, `DefaultEsStateService`). Catch-block logic untouched; the loop still continues past per-indexer failures. `./mvnw spotless:check` and `./mvnw test` (502 passing) green.
 
 ---
 
@@ -285,18 +536,22 @@ Fix scope: zero code work pending. This entry tracks the verification gap; close
 ## 2026-05-15 — `use.backend.check` read sits outside the worker's fail-open try/catch
 
 **Severity:** medium
-**Status:** open
+**Status:** fixed (2026-05-20, session oglasino-router-use-backend-check-fail-open-1)
 **Found in:** `oglasino-router/src/index.ts:91-93`
 **Detail:** The fail-open `try`/`catch` in the router worker wraps the reads for `maintenance.active` and `admin.bypass.disabled`, but the `CONFIG.get("use.backend.check")` call sits outside it. If that specific KV read throws (transient KV outage), the exception propagates and the request fails — the opposite of the worker's documented fail-open behavior. Trivial fix: wrap or move the read inside the existing `try`. Found by Mastermind during the maintenance-split-propagation audit (2026-05-15). Linked from [`infra/cloudflare/maintenance.md`](infra/cloudflare/maintenance.md) Known limitations.
+
+> **Fix:** the `CONFIG.get("use.backend.check")` read is now inside the existing fail-open `Promise.all` alongside the other two KV reads. A throw on the `use.backend.check` read now resets all three flags to `false` (full fail-open), matching the existing semantics for the other two. The previously-nested `if (!maintenanceActive) { const useBackendCheck = await ... }` block was collapsed into a single combined gate (`if (!maintenanceActive && useBackendCheck) { ... }`). Lint and tests pass (32/32).
 
 ---
 
 ## 2026-05-15 — Worker matrix comment doesn't mention `use.backend.check`
 
 **Severity:** low
-**Status:** open
+**Status:** fixed (2026-05-20, session oglasino-router-use-backend-check-fail-open-1)
 **Found in:** `oglasino-router/src/index.ts:1-13`
 **Detail:** The matrix-comment block at the top of the worker is the closest thing to an in-source spec for the gate logic, but it documents only the two split flags (`maintenance.active` and `admin.bypass.disabled`). `use.backend.check` is a third input to `maintenanceActive` that can independently force the gate on; a reader treating the header comment as the spec misses a real input. Documentation-only fix — extend the comment to cover all three inputs. Found by Mastermind during the maintenance-split-propagation audit (2026-05-15). Linked from [`infra/cloudflare/maintenance.md`](infra/cloudflare/maintenance.md) Known limitations.
+
+> **Fix:** the top-of-file matrix-comment block in `src/index.ts` now names `CONFIG.use.backend.check` as the third input to `maintenanceActive`, with a footnote on the `maintenance.active=false` row explaining the probe-escalation interaction. The catch-block comment now states explicitly that all three flags fall back to `false`. Same session as the fail-open fix above.
 
 ---
 
@@ -381,9 +636,11 @@ The chat that introduced `LANG_MISSING_OR_INVALID` is a BugFixer chat. Fixing _o
 ## 2026-05-14 — Hardcoded Serbian tooltips on the product detail page
 
 **Severity:** low
-**Status:** open
+**Status:** fixed (2026-05-20, sessions oglasino-backend-product-tooltip-seed-1 + oglasino-web-product-tooltip-swap-1)
 **Found in:** `oglasino-web/src/components/server/ProductDetails.tsx:72`, `oglasino-web/src/components/client/NumberOfViews.tsx:16`
 **Detail:** The favorites-count and views-count tooltips use literal Serbian strings (`"Koliko je puta proizvod sacuvan"`, `"Koliko je puta proizvod pogledan"`) instead of next-intl keys — EN / RU / ME visitors see untranslated Serbian. A Part 6 (translations) violation in `oglasino-web` source. Found by Docs/QA during the QA-Preparation Product Detail page authoring.
+
+> **Fix:** two new keys seeded in the `COMMON` namespace — `product.tooltip.favorites_count.label` (EN 2374, RS 4474, RU 6574, CNR 274) and `product.tooltip.views_count.label` (EN 2375, RS 4475, RU 6575, CNR 275). Web swap replaced the literal `"Koliko je puta proizvod sacuvan"` (corrected to `sačuvan` in the Serbian seed) at `ProductDetails.tsx:72` and the literal `"Koliko je puta proizvod pogledan"` at `NumberOfViews.tsx:16` with `tCommon('product.tooltip.favorites_count.label')` and `tCommon('product.tooltip.views_count.label')` respectively. Backend tests 501 passing, web tests 154 passing, lint/tsc clean.
 
 ---
 
@@ -412,18 +669,22 @@ The chat that introduced `LANG_MISSING_OR_INVALID` is a BugFixer chat. Fixing _o
 ## 2026-05-14 — Messages chat list capped at 15 in the rendered UI
 
 **Severity:** medium
-**Status:** open
+**Status:** fixed (2026-05-20, messaging feature Brief 2 W8 + Brief 6a)
 **Found in:** `oglasino-web/src/messages/components/Chats.tsx`
 **Detail:** The conversation list renders only the most-recent Firestore page (limit 15). The chat store implements `loadMoreChats` and tracks `hasMoreChats` / `loadingMoreChats`, but `Chats.tsx` renders no "load more" affordance. A user with more than 15 conversations only ever sees the 15 most-recent by `lastUpdated`; older threads resurface only when the other party sends a new message that bumps `lastUpdated`. Invisible data-loss in the UX — the store supports paging, the UI doesn't expose it. Found by Docs/QA during the QA-Preparation Messages page authoring.
+
+> **Fix:** Brief 2 W8 added a "Load more" button at the bottom of `Chats.tsx`, wired to `useChatStore.loadMoreChats`, visible when `hasMoreChats` is true. Brief 6a swapped the placeholder reuse of `MESSAGES_PAGE.messages.load.more` to a dedicated `MESSAGES_PAGE.chats.load.more` key — seeded in all four locales (EN/RS/RU/CNR) and consumed by the swapped call site in `Chats.tsx`.
 
 ---
 
 ## 2026-05-14 — Messages silent text-only send failure
 
 **Severity:** medium
-**Status:** open
+**Status:** fixed (2026-05-20, messaging feature Brief 2 W5)
 **Found in:** `oglasino-web/src/messages/store/useChatStore.ts` (`sendMessage` catch branch)
 **Detail:** A Firestore write failure on a text-only message send logs `console.error`, runs orphan-image cleanup (a no-op for text), and rolls back the optimistic message by filtering out its tempId. No toast, no inline error, no surfaced state — the sender sees the message simply vanish. Image-upload failures in `MessageInput` do surface as `notify.error` toasts, so this is an asymmetry: a critical action fails silently on the text path. Found by Docs/QA during the QA-Preparation Messages page authoring.
+
+> **Fix:** Brief 2 W5 lifted the send-failure path to the React boundary. `useChatStore.sendMessage` now rethrows after orphan-image cleanup and optimistic-message rollback; the React caller in `Messages.tsx` awaits and calls `notify.error({ id: 'message-send-failed', title: tMessages('messages.send.failed.toast') })` on rejection. Same pattern as `MessageInput.tsx`'s image-upload-failure toast. `tempReceiver` and `tempProductContext` are preserved on failure so retry from the same context works. Translation key seeded by Brief 4 in all four locales.
 
 ---
 
@@ -439,9 +700,11 @@ The chat that introduced `LANG_MISSING_OR_INVALID` is a BugFixer chat. Fixing _o
 ## 2026-05-14 — `markdown.fild.load` translation key is a typo
 
 **Severity:** low
-**Status:** open
+**Status:** fixed (2026-05-20, by Igor directly)
 **Found in:** `oglasino-web/src/components/server/MarkdownViewer.tsx:18,22`
 **Detail:** `MarkdownViewer` references `tErrors('markdown.fild.load')` — "fild" is almost certainly meant to be "file". The rendered string is whatever the translation row says, so there is no user-visible break unless the row is also misnamed, but the key should be corrected across its registration and all locales. Found by Docs/QA during the QA-Preparation simple-pages batch.
+
+> **Fix:** key renamed `markdown.fild.load` → `markdown.field.load` in `MarkdownViewer.tsx` and the four locale seed files. Applied by Igor directly.
 
 ---
 
@@ -459,36 +722,44 @@ The chat that introduced `LANG_MISSING_OR_INVALID` is a BugFixer chat. Fixing _o
 ## 2026-05-14 — Pricing hero renders the same translation key on both subtitle lines
 
 **Severity:** low
-**Status:** open
+**Status:** fixed (2026-05-20, by Igor directly)
 **Found in:** `oglasino-web/app/[locale]/(portal)/(public)/pricing/page.tsx:32-34`
 **Detail:** The hero H1 calls `tPricing('hero.subtitle.line1')` on both of its two lines — almost certainly meant to be `line1` then `line2`. Result is a visible duplicate line under the hero title in all locales. Found by Docs/QA during the QA-Preparation simple-pages batch.
+
+> **Fix:** `pricing/page.tsx` second subtitle line now calls `tPricing('hero.subtitle.line2')` instead of duplicating `line1`. Applied by Igor directly.
 
 ---
 
 ## 2026-05-14 — Bad catalog slug produces two different failure modes depending on position
 
 **Severity:** medium
-**Status:** open
+**Status:** fixed (2026-05-20, session oglasino-web-catalog-slug-failure-unify-1)
 **Found in:** `oglasino-web/app/[locale]/(portal)/(public)/catalog/[[...slugs]]/page.tsx:92-94` (server-side first-slug redirect to home); `oglasino-web/src/components/client/product/ProductBreadcrumbs.tsx:55-61` (client-side fallback to `window.location.href = '/error'` when the breadcrumb chain resolves empty on `/catalog`).
 **Detail:** A catalog slug that does not resolve produces two different observable outcomes depending on where it sits in the URL: an invalid first slug server-redirects to home, while a partially-broken breadcrumb chain has a client-side fallback to `/error`. Same root cause — a slug that doesn't resolve — two different results. Intended behavior per Igor: messing with catalog routing should show a "category not found" error, consistently. Same root cause should produce the same outcome. Related to the silent-degradation entry below — same root cause, different observable outcome. Cross-referenced from the `category-navigation` and `catalog-page` QA topics as Known-issue pitfalls; when this bug is fixed, the topic pitfalls must flip to reflect the new behaviour.
+
+> **Fix:** `getCategoriesFromPathSlugs` in `[[...slugs]]/page.tsx` is now strict — sub-slug and final-slug misses return `undefined` like first-slug misses. The page guard swapped `redirect()` for `notFound()`. An explicit `if (slugs.length === 0)` redirect-to-home guard sits above the resolver so the bare `/catalog` URL keeps today's 307 behavior. New `app/[locale]/not-found.tsx` added so locale-layout providers (`NextIntlClientProvider`, `setRequestLocale`) wrap the 404 render; exports `metadata` with hardcoded `title: 'Not Found'` and `robots: { index: false, follow: false }`. `ProductBreadcrumbs.tsx`'s `useEffect` redirecting to `/error` was deleted (unreachable post-fix). All three failure modes now produce HTTP 404 at the original URL. `tsc`/`lint`/`test`/`prettier` clean.
 
 ---
 
 ## 2026-05-14 — Invalid catalog sub-slug degrades silently to parent category
 
 **Severity:** medium
-**Status:** open
+**Status:** fixed (2026-05-20, session oglasino-web-catalog-slug-failure-unify-1)
 **Found in:** `oglasino-web/app/[locale]/(portal)/(public)/catalog/[[...slugs]]/page.tsx:38-44` (sub/final slug resolution — `subCategory` and `finalCategory` stay `undefined` on a bogus slug, and the page renders against the deepest level that did resolve with no error and no redirect).
 **Detail:** An invalid second or third URL slug on the catalog route degrades silently to the parent category level — `/catalog/cars/bogus` renders identically to `/catalog/cars`, with no error, no redirect, no "category not found". A bad sub-slug produces a result that looks like the parent category, which can read as the parent filter being broken. Intended behavior per Igor: a bad slug at any level should show a "category not found" error, not silently fall back to the parent. Related to the two-failure-modes entry above — same root cause. Cross-referenced from the `category-navigation` and `catalog-page` QA topics as Known-issue pitfalls; when this bug is fixed, the topic pitfalls must flip to reflect the new behaviour.
+
+> **Fix:** same root cause as the paired 2026-05-14 entry above; closed by the same session. See that entry's fix block for details.
 
 ---
 
 ## 2026-05-14 — `perPage` is uncapped server-side
 
 **Severity:** medium
-**Status:** open
-**Found in:** `oglasino-backend` — `PagingDTO.getPageable()` → `PageRequest.of(page, perPage)`, called from `DefaultProductsFilterQueryBuilder.buildQuery`
+**Status:** fixed (2026-05-20, session oglasino-backend-perpage-cap-1)
+**Found in:** `oglasino-backend` — `PagingDTO.getPageable()` → `PageRequest.of(page, perPage)`, called from `DefaultProductsFilterQueryBuilder.buildQuery` via `SearchProductsDTO.getPagingSafe()`
 **Detail:** All product-search endpoints (`/api/secure/products`, `/api/secure/admin/products`, `/api/public/product/search`, plus their three autocomplete siblings) pass client-supplied `perPage` straight to Spring Data with no maximum. `RateLimitFilter` mitigates abuse, but a hard cap (e.g. 100) is appropriate hygiene. Discovered in the product-filtering bug sweep (backend audit, Q3).
+
+> **Fix:** `PagingDTO.java` gained a private `MAX_PER_PAGE = 100` constant and a private `cappedPerPage()` helper returning `Math.max(1, Math.min(perPage, MAX_PER_PAGE))`. Both `getPageable()` overloads (no-arg and `Sort`-variant) now call `cappedPerPage()` for the `PageRequest.of` size argument. Cap inherits transparently through all 8 `getPageable()` callers including `SearchProductsDTO.getPagingSafe()` on the non-null path. Direct `PageRequest.of` call sites that bypass `getPageable()` (PublicReviewController, DefaultReviewService.getMyReviews, scheduled jobs) use hardcoded or config-driven sizes and were deliberately out of scope. Lower bound clamps `perPage <= 0` to 1, changing observable behavior on `perPage = 0` from HTTP 500 to HTTP 200 size-1. New `PagingDTOTest` covers 9 cases. `spotless` + 511 tests green.
 
 ## 2026-05-14 — `PORTAL_SEARCH` silently drops body `productStates` / `moderationStates`
 
@@ -574,9 +845,11 @@ The chat that introduced `LANG_MISSING_OR_INVALID` is a BugFixer chat. Fixing _o
 ## 2026-05-14 — Dead `free` field on backend `NewProductRequestDTO`
 
 **Severity:** low
-**Status:** open
+**Status:** fixed (2026-05-20, session oglasino-backend-newproductdto-free-field-delete-1)
 **Found in:** `oglasino-backend/src/main/java/com/memento/tech/oglasino/dto/NewProductRequestDTO.java` (field `private boolean free` plus `isFree()`/`setFree()`)
 **Detail:** Web removed `free` from its `NewProductRequestDTO` interface in web session 4 (free-zone derived from `topCategory.freeZone` instead). Backend still carries the field with getter/setter; no production code reads it (grep across `src/main/java` shows zero call sites that consume `request.isFree()` or `requestDTO.isFree()` on a product request). Jackson tolerates the absent field on incoming JSON. Dead field worth deleting in a follow-up chore to match the trust-boundary direction (free-zone is server-derived).
+
+> **Fix:** `private boolean free`, `isFree()`, and `setFree()` removed from `NewProductRequestDTO.java`. Pre-edit grep confirmed zero call sites in `src/main/java` and `src/test/java`. Verified Jackson tolerates the absent field on incoming JSON: no `@JsonIgnoreProperties` on the DTO, no `spring.jackson.*` override flipping `FAIL_ON_UNKNOWN_PROPERTIES` to `true`. Legacy clients still sending `"free": true` are silently ignored per Spring Boot's default. `./mvnw spotless:check` and `./mvnw test` (501 passing) green.
 
 ## 2026-05-14 — `regionAndCity` declared in `createProductSchema` but unread by validator
 
@@ -599,9 +872,11 @@ The chat that introduced `LANG_MISSING_OR_INVALID` is a BugFixer chat. Fixing _o
 ## 2026-05-14 — Boot-time moderation config audit logs ERROR but does not fail boot
 
 **Severity:** low
-**Status:** open
+**Status:** fixed (2026-05-20, session oglasino-backend-moderation-audit-fail-fast-1)
 **Found in:** `oglasino-backend/src/main/java/com/memento/tech/oglasino/moderation/ContentValidationConfig.java` (`auditRequiredConfig`)
 **Detail:** Missing/blank required keys are surfaced at boot via `log.error(...)` but the listener does not throw — the first runtime moderation call against an absent key throws `IllegalStateException`. Acceptable for dev environments that may run with an un-seeded config table. A `@Profile`-gated boot-fail (or env-toggle) for production would convert the silent-misconfig window into a hard startup failure. Framed as enhancement, not defect.
+
+> **Fix:** `auditRequiredConfig` now throws `IllegalStateException` on the first missing or blank required key encountered, aborting the Spring application context at boot on every environment (no profile gate, no env toggle). Exception message names the offending key and instructs the operator to seed it. Existing positive seed test plus one new negative test (`auditRequiredConfig_throwsOnFirstMissingOrBlankRequiredKey`) cover the behavior. Seed file verified to carry every required key — boot passes on a fresh checkout. `./mvnw spotless:check` and `./mvnw test` (502 passing, +1 new) green.
 
 ## 2026-05-14 — Web component-render test coverage gap (testing-library not installed)
 
@@ -627,9 +902,11 @@ The chat that introduced `LANG_MISSING_OR_INVALID` is a BugFixer chat. Fixing _o
 ## 2026-05-13 — Legacy unused regex rows in data-configuration.sql
 
 **Severity:** low
-**Status:** open
+**Status:** fixed (2026-05-20, session oglasino-backend-legacy-regex-seed-cleanup-1)
 **Found in:** `oglasino-backend/src/main/resources/data/configuration/data-configuration.sql` ids 2–7
 **Detail:** Six pre-feature config rows (`validation.regex.banned.words`, `validation.regex.repeated.chars`, `validation.regex.punctuation`, `validation.regex.emojis`, `validation.regex.promo` without language suffix, `validation.regex.spam.description`) remain seeded but have zero call sites — superseded by the per-language `validation.regex.*.{lang}` and `validation.banned_words.{lang}` rows. Backend session 3 flagged these for Mastermind as a follow-up "config-seed garbage collection" PR. Safe to delete in a chore.
+
+> **Fix:** six rows for keys `validation.regex.banned.words`, `validation.regex.repeated.chars`, `validation.regex.punctuation`, `validation.regex.emojis`, `validation.regex.promo` (unsuffixed), `validation.regex.spam.description` deleted from `data-configuration.sql`. Pre-edit grep confirmed zero call sites in `src/main/java` and `src/test/java` for each exact unsuffixed key. Per-language `validation.regex.promo.{lang}`, `validation.banned_words.{lang}`, and `validation.regex.contacts.{lang}` rows untouched (live consumers). `ConfigurationSeedTest` and the full 501-test suite pass post-deletion.
 
 ## 2026-05-13 — 429 rate-limit response shape diverges from error contract
 

@@ -257,7 +257,7 @@ Both files have identical content. `last-session.md` is always a duplicate of th
 - The engineer agent determines `<n>` by listing its own `.agent/` folder for files matching `*-<slug>-*.md`, taking the highest existing order number, and adding one. If no such file exists, this is the first session for that slug and `<n>` is `1` — producing a filename ending in `-<slug>-1.md`.
 - Numbering is independent per repo. `oglasino-backend`'s `validation-refactor` sessions are `oglasino-backend-validation-refactor-1`, `-2`, `-3`; `oglasino-web`'s are `oglasino-web-validation-refactor-1`, `-2`, `-3`, counted separately. The repo name in the filename prevents collision. An engineer agent cannot see another repo's `.agent/` folder, so per-repo counting is the only scheme that works.
 - The date in the filename is informational. It does not drive the number.
-- **Docs/QA archive-side stub.** When Docs/QA archives a session file from a sibling repo's `.agent/` folder to `oglasino-docs/sessions/`, it leaves a one-line pointer file in the source `.agent/` folder under the same filename. The pointer file contains only: `Archived → oglasino-docs/sessions/<archived-filename>.md`. This preserves the per-repo counting basis for future engineer sessions on the same slug without retaining the session content in the source repo. Briefs may still pre-state `<n>` when convenient, but engineers no longer require it — they can always count their own `.agent/` folder including the pointer files.
+- **Docs/QA archive-side.** When Docs/QA archives a session file from a sibling repo's `.agent/` folder to `oglasino-docs/sessions/`, it deletes original file from sibling repo `.agent/` folder.
 
 **Archiving:** Docs/QA copies the named file to `oglasino-docs/sessions/`. The file is already correctly named, so the archive is a straight copy — no rename.
 
@@ -408,8 +408,6 @@ When adding translations:
 2. Append new rows at the **end of that group**, before the next namespace starts.
 3. Use the next available ID. If the next ID would collide with an existing row, the agent stops and reports the collision. Does not silently overwrite.
 4. Maintain alphabetical order within a namespace group when reasonable. Skip if the existing group isn't already alphabetized.
-
-**Exception for large feature seeds:** when a single feature adds many keys (rough threshold: 10+ keys across multiple namespaces), the work may be placed in dedicated `NNNN-data-<feature>-translations-{LANG}.sql` files instead of inline-appended. The dedicated files must (a) carry the next available file-prefix number, (b) keep per-language IDs in a contiguous range outside the existing range, and (c) include a comment header naming the feature. Inline-append remains the default for small additions.
 
 ### Rule 4 — Translation key pattern for validation errors
 

@@ -1267,18 +1267,20 @@ The post-deletion dialog opens on the next page's mount via the sessionStorage f
 
 ### 14.4 Post-deletion confirmation dialog
 
-After successful deletion, the user has been signed out and redirected away from any protected page. The root layout (mounted on every route at and below `/{locale}/`) checks `sessionStorage.getItem('account-just-deleted')` on mount.
+After successful deletion, the user has been signed out and redirected away from any protected page.
 
-If present, the layout opens `InfoDialog` via `DialogManager` with content:
+The post-deletion, restoration, and ban-notice dialogs are opened by a single client-side initializer (`oglasino-web/src/components/client/initializers/AccountStateDialogsInit.tsx`) that subscribes to three Zustand store flags on `useAuthStore`: `accountJustDeleted`, `restored`, and `accountBanned`. Each flag is set by its respective trigger path (the delete-confirmation dialog's `handleDelete` for `accountJustDeleted`; the axios response interceptor reading `X-Account-Restored: true` for `restored`; the `syncUserToBackend` sign-in branch, the axios 403-`USER_BANNED` interceptor, the cross-browser `auth/user-disabled` request-interceptor branch, and `useAuthStore.mapAuthError` for `accountBanned`). The initializer reactively opens `DialogId.INFO_DIALOG` with the appropriate copy and clears the flag inside the same effect, so dismissal + refresh does not re-open. This replaces an earlier sessionStorage-based mechanism — the locale layout does not remount on `router.replace` within the same `[locale]` segment, so a mount-only sessionStorage read would not fire reliably.
+
+For the post-deletion case, the delete-confirmation dialog's `handleDelete` sets `accountJustDeleted` (carrying the scheduled hard-delete date) before sign-out and redirect. `AccountStateDialogsInit` reactively opens `InfoDialog` with content:
 
 ✓ Your account has been scheduled for deletion.
 It will be permanently deleted on {date}.
 To restore your account, sign in within 7 days. After that, your account and all data are permanently removed.
 [ Go to home ]
 
-The date interpolates from the sessionStorage value. The key is removed via `sessionStorage.removeItem('account-just-deleted')` immediately after the dialog opens — one-shot, does not re-open across refreshes.
+The date interpolates from the store value. The initializer clears `accountJustDeleted` in the same effect that opens the dialog — one-shot, does not re-open across refreshes.
 
-If the user has never deleted their account, the key is never present and no dialog renders. Other users are unaffected.
+If the user has never deleted their account, the flag is never set and no dialog renders. Other users are unaffected.
 
 The dialog's "Go to home" button (and X button) dismiss the dialog; the user is already on the home page so no navigation is needed.
 
@@ -1288,12 +1290,12 @@ Translation keys in `DASHBOARD_PAGES` (under `dashboard.pages.account.deleted.di
 
 The user has signed in and is on a public or home page (signing in does not require leaving a public page). The axios response interceptor inspects every response for `X-Account-Restored: true`. When detected, the interceptor sets a flag in `useAuthStore`: `useAuthStore.getState().setRestored(true)`.
 
-`useAuthStore` gains a `restored: boolean` field and `setRestored(bool)` action.
+`useAuthStore` carries a `restored: boolean` field and `setRestored(bool)` action.
 
-The root layout watches this flag. On flag flip to `true`:
+`AccountStateDialogsInit` (per §14.4) subscribes to this flag. On flag flip to `true`:
 
 1. Opens `InfoDialog` via `DialogManager` with restoration content (§15.2 keys).
-2. Clears the flag: `useAuthStore.getState().setRestored(false)`.
+2. Clears the flag in the same effect: `useAuthStore.getState().setRestored(false)`.
 
 Dialog content:
 
@@ -1305,7 +1307,7 @@ Auto-dismiss after 10 seconds via `setTimeout` (or via the dialog's native auto-
 
 The dialog opens once per restore. Subsequent requests in the same session don't trigger the flag because `deletion_status` is now `ACTIVE` and the auth filter no longer sets `X-Account-Restored`.
 
-The restoration dialog can open on the current page (the user is signed in; no protected-route redirect happens). Unlike the post-deletion and ban-notice dialogs, no sessionStorage flag is needed — the dialog flows directly from the response interceptor.
+The restoration dialog can open on the current page (the user is signed in; no protected-route redirect happens).
 
 ### 14.6 Profile page — "Scheduled for deletion" badge
 
@@ -1380,29 +1382,29 @@ The brief should also instruct the engineer to audit `Chats.tsx` (the conversati
 
 ### 14.10 Ban-notice dialog
 
-Two triggers for the dialog. Both write `sessionStorage.setItem('account-banned', '1')` and rely on the root layout opening the dialog on next mount.
+Two triggers for the dialog. Both call `auth.signOut()` and then set the `accountBanned` flag on `useAuthStore` via `setAccountBanned(true)`; `AccountStateDialogsInit` (per §14.4) reactively opens the dialog.
 
 **Trigger 1 — during `syncUserToBackend`** (per §14.11): on `disabled: true` response OR `USER_BANNED`/`EMAIL_BANNED` rejection:
 
 ```typescript
 await auth.signOut();
-sessionStorage.setItem("account-banned", "1");
+useAuthStore.getState().setAccountBanned(true);
 // SessionGuard or natural navigation drops the user from protected pages.
-// Root layout reads the flag on next mount, opens dialog, removes flag.
+// AccountStateDialogsInit opens the dialog when the flag flips and clears it.
 ```
 
 **Trigger 2 — global axios interceptor** (per §14.12): on `403 + USER_BANNED` mid-session:
 
 ```typescript
 auth.signOut();
-sessionStorage.setItem("account-banned", "1");
-// Navigation completes; root layout opens dialog.
+useAuthStore.getState().setAccountBanned(true);
+// Navigation completes; AccountStateDialogsInit opens the dialog.
 ```
 
-On root layout mount, the flag is checked. If present:
+When `accountBanned` flips to `true`, `AccountStateDialogsInit`:
 
-1. Open `InfoDialog` via `DialogManager` with ban-notice content.
-2. `sessionStorage.removeItem('account-banned')`.
+1. Opens `InfoDialog` via `DialogManager` with ban-notice content.
+2. Clears the flag in the same effect: `useAuthStore.getState().setAccountBanned(false)`.
 
 Dialog content:
 
@@ -1418,9 +1420,9 @@ The dialog does NOT identify the specific user, does NOT display a reason. Priva
 
 The dialog's "Go to home" button (or X button) dismisses; the user is already on the home page so no navigation.
 
-Translation keys in `BANNED_DIALOG` namespace — see §15.7.
+Translation keys are the four `banned.dialog.*` keys in the `DIALOG` namespace — see §15.
 
-**Race-safety**: if both triggers fire in rapid succession, both call `auth.signOut()` and both set the same sessionStorage key. The next root-layout-mount opens the dialog once.
+**Race-safety**: if both triggers fire in rapid succession, both call `auth.signOut()` and both call `setAccountBanned(true)`. The Zustand flag is idempotent and the dialog opens once.
 
 ### 14.11 `syncUserToBackend` — read disabled and trigger ban dialog
 
@@ -1443,7 +1445,7 @@ export async function syncUserToBackend(
 
     if (userData.disabled) {
       await auth.signOut();
-      sessionStorage.setItem("account-banned", "1");
+      useAuthStore.getState().setAccountBanned(true);
       return null;
     }
 
@@ -1454,7 +1456,7 @@ export async function syncUserToBackend(
       isErrorWithCode(error, "USER_BANNED")
     ) {
       await auth.signOut();
-      sessionStorage.setItem("account-banned", "1");
+      useAuthStore.getState().setAccountBanned(true);
       return null;
     }
     throw error;
@@ -1481,7 +1483,7 @@ api.interceptors.response.use(
       const errorBody = error.response.data;
       if (errorBody?.errors?.[0]?.code === "USER_BANNED") {
         auth.signOut();
-        sessionStorage.setItem("account-banned", "1");
+        useAuthStore.getState().setAccountBanned(true);
         // Let navigation happen. Don't reject (we don't want every caller
         // to handle the error). Return a Promise that never resolves —
         // the redirect will unmount the caller.
@@ -1606,9 +1608,9 @@ These changes flow through the codebase via TypeScript compile errors until all 
 | `errors.user.locked.from.deletion` | "Account deletion is currently restricted. Please contact support@oglasino.com." |
 | `errors.user.not.pending.deletion` | "Your account is not in a pending-deletion state."                               |
 
-### 15.7 New namespace `BANNED_DIALOG`
+### 15.7 `DIALOG` namespace
 
-Adds entry to `TranslationNamespace` enum (backend), `TranslationNamespaceEnum` (frontend), and conventions Part 6 Rule 1.
+The four banned-dialog keys (`banned.dialog.title`, `banned.dialog.body.first`, `banned.dialog.body.delete.intro`, `banned.dialog.body.duration`) live in the `DIALOG` namespace alongside the post-deletion, restoration, and delete-confirmation dialog keys. No dedicated `BANNED_DIALOG` namespace exists in `TranslationNamespaceEnum`.
 
 | Key                               | English value                                                                                                                                                                                |
 | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1791,9 +1793,9 @@ No staged or canary rollout — pre-production means deploy and iterate freely.
 
 ### 19.1 Admin UI for ban-with-reason
 
-The backend `disableUser` endpoint accepts a `banReason` per §8.6. The existing admin button does not yet pass a reason. The button keeps working with a default placeholder; a future web brief adds a reason-input modal.
+The admin ban-with-reason input modal is shipped at `oglasino-web/src/components/popups/dialogs/AdminBanUserDialog.tsx`. The dialog renders a required `Textarea` (max 500 characters, validated as `trimmed.length > 0`) for the ban reason, and the Confirm button is disabled until a non-empty trimmed reason is entered. The reason is passed server-side via `banUser(userId, reason)` and is stored in `users.ban_reason` and `banned_user_audit.ban_reason`. The reason is admin-internal — the banned user is not shown the reason at any point in the user-facing UI.
 
-**Trigger to revisit:** when operator has decided ban-with-reason is operationally useful.
+**Trigger to revisit:** n/a — shipped.
 
 ### 19.2 Admin UI for managing deletion locks
 

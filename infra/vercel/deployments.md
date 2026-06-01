@@ -34,11 +34,13 @@ workflows:
 
 Both workflows:
 1. Run pre-checks (lint, typecheck)
-2. Flip Cloudflare KV maintenance flag ON
+2. Flip Cloudflare KV `maintenance.web.active` flag ON
 3. Pull Vercel env (production scope) for the project
 4. Build with Vercel CLI
 5. Deploy to Vercel via `vercel deploy --prebuilt --prod`
-6. (Stage only) Flip Cloudflare KV maintenance flag OFF on success
+6. (Stage only) Flip Cloudflare KV `maintenance.web.active` flag OFF on success
+
+A web deploy flips **only** `maintenance.web.active` — mobile traffic is gated on `maintenance.backend.active` and is unaffected by a web deploy. See the [maintenance runbook](../cloudflare/maintenance.md).
 
 ## Why workflow-driven instead of Vercel auto-deploy
 

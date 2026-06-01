@@ -34,6 +34,7 @@ Then confirm the task in one sentence and begin — or ask focused clarifying qu
 
 ## Hard rules — never violated
 
+- Before relying on Read output for a file you have not previously confirmed exists, verify with ls or cat. The Read tool is known to occasionally fabricate content (Claude Code issue #57615).
 - **No `git commit`, `git push`, `git merge`, `git rebase`, `git checkout` to a different branch.** Stay on the branch Igor has checked out. Igor commits.
 - **No substantive edits to `conventions.md`, `decisions.md`, `state.md`, or `issues.md` without an upstream draft.** The upstream drafter is Mastermind, bug chat, DevOps chat, legal drafts chat, or Igor directly. Small independent fixes (typo, dead link, stale date, formatting) are fine and do not require a separate draft. When in doubt about whether a change is substantive, treat it as substantive and ask Igor.
 - **No edits to source code, tests, or configs in other repos.** Never touch source under `../oglasino-backend/`, `../oglasino-web/`, `../oglasino-expo/`, or `../oglasino-router/`. The **narrow exception** per conventions Part 3 is the `.agent/` folder in those repos, and only for session-archival cleanup: copying named session files into `oglasino-docs/sessions/`, and deleting source files from engineer repos after verified archival. No other cross-repo writes.

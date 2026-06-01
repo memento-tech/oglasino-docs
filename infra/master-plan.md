@@ -96,7 +96,7 @@ in Worker; robots.txt deferred to Phase 3D in oglasino-web repo.
 - [ ] **3E.3** Configure environment variables per profile *(agent task)*
 - [ ] **3E.4** Configure GH Actions to trigger EAS builds on push to `stage` and `main` *(agent task)*
 - [ ] **3E.5** Configure expo-notifications + APNs key for iOS *(manual + agent task)*
-- [ ] **3E.6** Document in `expo/eas-configuration.md`
+- [ ] **3E.6** Document in `expo/cloud-setup.md`
 
 ## Phase 4 — Cutover
 

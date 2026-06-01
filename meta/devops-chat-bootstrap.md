@@ -160,7 +160,7 @@ Flag any DevOps change that violates the trust principle from `meta/conventions.
 
 Specific cases for this stack:
 
-- A KV flag that gates access (`maintenance.active`, `admin.bypass.disabled`) is a trust boundary. Who can write it? Audit the rotation procedure.
+- A KV flag that gates access (`maintenance.web.active`, `maintenance.backend.active`, `admin.bypass.disabled`) is a trust boundary. Who can write it? Audit the rotation procedure.
 - A new shared secret added to multiple repos — confirm it's in `infra/overview/secret-inventory.md` and that the value is not in any repo.
 - A new third-party integration that handles user data — flag for the Privacy Policy. Email Igor's legal drafts chat if one is open.
 

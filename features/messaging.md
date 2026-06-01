@@ -131,7 +131,7 @@ Two-collection forward/reverse index.
 
 ```
 userblocks/{ownerUid}/blocked/{blockedUid}: {
-  blockerId: string,          // ownerUid; redundant with path; convenience
+  blockedUserId: string,      // blockedUid; redundant with path; convenience
   createdAt: Timestamp
 }
 
@@ -482,7 +482,7 @@ Polish items in scope:
 
 `useChatStore.loadMoreChats` exists and works (per audit). `Chats.tsx` exposes no UI to call it. Pre-fix: users with >15 chats see only the most-recent 15. Fix: add a "Load more" button at the bottom of the list, calling `loadMoreChats`, matching the existing pattern from `Messages.tsx`'s `loadMoreMessages`.
 
-The dedicated key `MESSAGES_PAGE.chats.load.more` is seeded in all four locales (EN/RS/RU/CNR; RU in Latin transliteration per the existing seed file's convention). Per-locale row IDs: EN=3363, RS=5463, CNR=1263, RU=7563. The web call site in `Chats.tsx` consumes the dedicated key. The earlier placeholder reuse of `messages.load.more` (in Brief 2 W8) was replaced by Brief 6a.
+The dedicated key `MESSAGES_PAGE.chats.load.more` is seeded in all four locales (EN/RS/RU/CNR; RU in Latin transliteration per the existing seed file's convention). Per-locale row IDs: EN=3391, RS=5491, CNR=1291, RU=7591. The web call site in `Chats.tsx` consumes the dedicated key. The earlier placeholder reuse of `messages.load.more` (in Brief 2 W8) was replaced by Brief 6a.
 
 ### 5.12 Image attachments
 

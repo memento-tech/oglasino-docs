@@ -8,23 +8,33 @@ For the gate-internal limitations surfaced during the maintenance-split audit, s
 
 ## KV keys the worker reads
 
-The worker reads three keys from the `CONFIG` KV namespace. All are string-typed; only the literal string `"true"` is truthy. Any other value — absent, `"false"`, empty — is treated as false.
+The worker reads four keys from the `CONFIG` KV namespace. All are string-typed; only the literal string `"true"` is truthy. Any other value — absent, `"false"`, empty — is treated as false.
 
 | Key                     | Type   | Truthy value | Effect when truthy                                                       |
 | ----------------------- | ------ | ------------ | ------------------------------------------------------------------------ |
-| `maintenance.active`    | string | `"true"`     | Engages the maintenance gate.                                            |
-| `admin.bypass.disabled` | string | `"true"`     | Disables the admin bypass. Only consulted when `maintenance.active` is on. |
-| `use.backend.check`     | string | `"true"`     | Runs the backend liveness probe. On probe failure, forces `maintenance.active = true` for that request. |
+| `maintenance.web.active`     | string | `"true"`     | Web's maintenance state (web deploys, web-specific outages). Composed per-client — see below. |
+| `maintenance.backend.active` | string | `"true"`     | Backend's maintenance state (backend deploys, backend outages). Composed per-client — see below.                                            |
+| `admin.bypass.disabled` | string | `"true"`     | Disables the admin bypass on the web/admin path. Only consulted when the web surface is in maintenance. |
+| `use.backend.check`     | string | `"true"`     | Runs the backend liveness probe (gates mobile `/api/mobile/*` only, targets `/actuator/health/readiness`). On probe failure, forces the mobile surface into maintenance for that request. |
 
-**Default behavior when keys are absent.** A missing key reads as `null` and is treated as `"false"`. With no KV entries, all three flags are off and traffic passes through normally. Backend and web read-back agree on this — the default is open.
+**Per-client composition.** The two `maintenance.*` flags are not consumed directly — the worker composes them per request:
+
+- **Web request** is in maintenance when `maintenance.web.active OR maintenance.backend.active` (web cannot serve without the backend).
+- **Mobile request** (`/api/mobile/*`) is in maintenance when `maintenance.backend.active OR (the backend liveness probe fails)`. Mobile does not depend on web, so `maintenance.web.active` does not affect it.
+
+**Default behavior when keys are absent.** A missing key reads as `null` and is treated as `"false"`. With no KV entries, all four flags are off and traffic passes through normally. Backend and web read-back agree on this — the default is open.
 
 The worker caches each KV read for 30 seconds (`{cacheTtl: 30}`). The 60-second deploy-time wait (see [Deploy flow](#deploy-flow)) is 2× this, to cover propagation across all edges.
 
 ## Gate behavior matrix
 
-The two primary flags compose into four cells. The worker's behavior in each:
+Maintenance is composed per-client, then the web-only admin bypass is applied. Let `webDown = maintenance.web.active OR maintenance.backend.active`.
 
-| `maintenance.active`  | `admin.bypass.disabled` | Effect                                                                                 |
+**Mobile path** (`/api/mobile/*`): in maintenance when `maintenance.backend.active OR (probe fails)` — return the 503 maintenance response; otherwise strip the `/mobile` segment and forward to the backend origin. The admin bypass does not apply (mobile has no admin surface).
+
+**Web / admin path** (apex web, API host, admin-locale-prefixed) composes into four cells:
+
+| `webDown`             | `admin.bypass.disabled` | Effect                                                                                 |
 | --------------------- | ----------------------- | -------------------------------------------------------------------------------------- |
 | `false` (or absent)   | (any)                   | All traffic passes through to origin.                                                  |
 | `true`                | `false` (or absent)     | Admin requests bypass; non-admin requests receive a 503 maintenance response.          |
@@ -50,9 +60,9 @@ When the gate engages and admin bypass does not apply:
 
 ## use.backend.check
 
-`use.backend.check` is a pre-existing third input to the gate, unchanged by the split. When set to `"true"`, the worker runs a backend liveness probe per request; on probe failure, it forces `maintenance.active = true` for that request only (no KV write — the override is in-memory and request-scoped).
+`use.backend.check` is a pre-existing gate input; the maintenance split re-points its probe to gate the mobile `/api/mobile/*` path only. When set to `"true"`, the worker runs a backend liveness probe (targeting `/actuator/health/readiness`) on each mobile request; on probe failure, it forces the mobile surface into maintenance for that request only (no KV write — the override is in-memory and request-scoped).
 
-This is a separate input from `maintenance.active` and `admin.bypass.disabled`. A reader treating the matrix above as the complete gate spec will miss it — see [issues.md](../../issues.md) (matrix-comment incomplete).
+This is a separate input from the two `maintenance.*` flags and `admin.bypass.disabled`. A reader treating the matrix above as the complete gate spec will miss it — see [issues.md](../../issues.md) (matrix-comment incomplete).
 
 The `use.backend.check` read currently sits **outside** the fail-open `try`/`catch` that wraps the other two KV reads. A transient KV outage on this specific read propagates as a request failure rather than falling open, contradicting the worker's documented fail-open intent. Trivial fix (wrap or move inside the existing try); tracked as a medium-severity item in [issues.md](../../issues.md).
 
@@ -76,7 +86,7 @@ sequenceDiagram
 
     Push->>GH: trigger workflow
     GH->>GH: Pre-checks job<br/>(lint, typecheck, build)
-    GH->>CF: PUT maintenance.active = "true"
+    GH->>CF: PUT maintenance.web.active = "true"<br/>(backend deploy also PUTs maintenance.backend.active)
     GH->>CF: PUT admin.bypass.disabled = "true"
     Note over GH,Edge: wait 60s (2× worker cacheTtl=30s)
     GH->>Target: Deploy
@@ -88,7 +98,7 @@ Step-by-step:
 
 1. **Trigger.** Push to `stage` (stage env) or `main` (prod env) starts the workflow.
 2. **Pre-checks.** Lint, typecheck, build. Failure aborts before any KV write.
-3. **Flag flip.** Both `maintenance.active` and `admin.bypass.disabled` are set to `"true"` via `curl` against the Cloudflare REST API. Full lockdown engaged.
+3. **Flag flip.** The maintenance flag(s) and `admin.bypass.disabled` are set to `"true"` via `curl` against the Cloudflare REST API — a **web** deploy sets `maintenance.web.active`; a **backend** deploy sets both `maintenance.backend.active` and `maintenance.web.active`. Full lockdown engaged.
 4. **Propagation wait.** 60 seconds. The worker's per-key `cacheTtl` is 30 seconds; the wait is doubled so that every edge sees both flags `"true"` before any deploy artifact lands.
 5. **Deploy.** Vercel CLI for web, droplet-side for backend.
 6. **Advisory verify.** The workflow probes the edge to confirm the maintenance response is visible. **Warns only; does not fail the deploy.**
@@ -102,12 +112,12 @@ Run these three steps **in order**, after the deploy workflow finishes. The orde
 
 1. **`/opt/oglasino/scripts/admin-bypass-allow.sh`** (on the droplet). Flips `admin.bypass.disabled` to `"false"`. Admin traffic can now reach the panel; end-user traffic is still blocked.
 2. **Refresh caches in the admin panel.** Clears caches and warms them while only admin traffic is permitted, so the warm-up does not dump cold-cache load on end users.
-3. **`/opt/oglasino/scripts/maintenance-off.sh`** (on the droplet). Flips `maintenance.active` to `"false"`. End-user traffic resumes against a warmed cache.
+3. **`/opt/oglasino/scripts/maintenance-off.sh`** (on the droplet). Flips whichever maintenance flag(s) the deploy set — `maintenance.web.active` (web deploy), or both `maintenance.web.active` and `maintenance.backend.active` (backend deploy) — to `"false"`. End-user traffic resumes against a warmed cache.
 
 **Why the order.**
 
 - Step 1 must precede Step 2 — until the admin bypass is allowed, the operator cannot reach the admin panel through the gate to refresh caches.
-- Step 2 must precede Step 3 — flipping `maintenance.active` off before the caches are warm dumps cold-cache traffic at users; warming under admin-only load avoids that.
+- Step 2 must precede Step 3 — flipping the maintenance flag(s) off before the caches are warm dumps cold-cache traffic at users; warming under admin-only load avoids that.
 
 ## Droplet scripts
 
@@ -118,7 +128,7 @@ Both scripts live at `/opt/oglasino/scripts/` on the production droplet. Both lo
 | Script                    | What it does                                              | Owner               |
 | ------------------------- | --------------------------------------------------------- | ------------------- |
 | `admin-bypass-allow.sh`   | Flips `admin.bypass.disabled` to `"false"` via Cloudflare REST API. Echoes a confirmation message on success. | <!-- TODO --> `<user>:<group>` |
-| `maintenance-off.sh`      | Flips `maintenance.active` to `"false"` via Cloudflare REST API. Echoes a confirmation message on success. | <!-- TODO --> `<user>:<group>` |
+| `maintenance-off.sh`      | Flips the maintenance flag(s) the deploy set (`maintenance.web.active`, plus `maintenance.backend.active` on a backend deploy) to `"false"` via Cloudflare REST API. Echoes a confirmation message on success. | <!-- TODO --> `<user>:<group>` |
 
 Both scripts use the same credentials (`CF_API_TOKEN`, `CF_ACCOUNT_ID`, namespace ID) sourced from `/opt/oglasino/.env.cf`. The file is the single point of secret rotation for both scripts. See [`../overview/secret-inventory.md`](../overview/secret-inventory.md) for the secret-name conventions used elsewhere; the `.env.cf` file is not currently inventoried as a separate location.
 

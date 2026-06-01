@@ -24,6 +24,7 @@ captures that reality so mobile can be aligned to it later.
 - [Backend pipeline](#backend-pipeline)
 - [Trust boundaries summary](#trust-boundaries-summary)
 - [Known gaps](#known-gaps)
+- [Platform adoption](#platform-adoption)
 
 ---
 
@@ -431,3 +432,117 @@ Manual-test reminders (also in `issues.md`):
 
 - Pagination overlap verification across all five surfaces with 25+ products.
 - Random-ordering stability across pages within a session, reshuffle on refresh.
+
+## Platform adoption
+
+Mobile (`oglasino-expo`) aligns to the web/backend filtering and search behavior
+documented above. This section records what mobile must match, where mobile
+legitimately diverges by platform, and the seams a future deep-link feature
+plugs into. Authored from three read-only audits (web reference, backend
+reference, expo current-state) run 2026-05-31; resolutions confirmed by Igor in
+the chat-D Mastermind session.
+
+Status: chat D (`oglasino-expo`, on `new-expo-dev`) is the adoption chat. Backend
+and web are unchanged by chat D — it is mobile-only client work against the
+already-shipped backend contract.
+
+### What mobile must match (the contract)
+
+These are the points where mobile diverged and is being brought to parity. Each
+is a behavioral match to web; the mechanism may differ (mobile has no URL bar),
+but the user-visible result is identical to web.
+
+- **`clearAllFilters` resets every filter field, including the product-state and
+  moderation-state arrays.** The dashboard "active filter count" and "any filter
+  active" indicator include the product-state array, so the trash icon and the
+  count badge appear when only a state filter is set — matching web's
+  dashboard/admin behavior. The portal count excludes state arrays (portal renders
+  no state filter), matching web's portal behavior.
+
+- **Search submit preserves category context.** On a category screen, submitting a
+  text search keeps the user in that category with the search applied; it does not
+  drop them to the listing root. Web does this by staying on the category URL path;
+  mobile does it by navigating to the same category path (which re-derives the
+  category from the path on the destination render) while carrying the search term
+  in the shared portal filter store. Same user-visible result as web.
+
+- **The public user-products list participates in no filter store.** It is driven
+  solely by the seller's `ownerId`. Portal filters set on the home or category
+  screen do not bleed onto the seller's listings — matching web, whose user page
+  reads from no filter store.
+
+- **The public user/seller screen has no extra-products section.** Web renders a
+  "more from this seller" carousel below the main list because web paginates one page
+  at a time, so there is always other inventory to surface. Mobile uses exhaustive
+  infinite scroll: the main list loads the seller's entire catalog before any
+  below-the-fold section would mount, so a seller-scoped carousel there is structurally
+  duplicate-or-empty. Mobile therefore renders only the main list on this screen, with
+  no carousel. (The `MORE_FROM_SELLER` section remains correct and in use on the
+  product-detail screen, which paginates.)
+
+- **`applyRandom` / `randomSeed` are suppressed when `searchText` is non-blank or
+  `orderBy` is set.** The backend enforces this regardless of the client (confirmed
+  in the backend reference audit), so this is a client-side correctness/parity
+  change, not a behavior change. Its visible effect is that mobile stops
+  re-randomizing result order on a manual refresh while a search or sort is active
+  — matching web, which does not reshuffle under an active search.
+
+### Platform divergences (intentional, not defects)
+
+These differ from web and are correct for the platform. Do not "fix" them toward
+web.
+
+- **Pagination model.** Web uses button-based numbered pages; mobile uses infinite
+  scroll (`FlatList.onEndReached`). Both honor page size 20 and 0-indexed paging
+  against the same endpoints. The difference is platform-idiomatic.
+
+- **Filter state persistence.** Web mirrors filter state to the URL query string
+  via `FilterManager`; mobile holds it in in-memory Zustand stores (no URL bar).
+  This is the expected platform-appropriate pattern.
+
+- **State-filter option labels render the raw enum string (`ACTIVE`, `INACTIVE`).**
+  This matches web, which also renders raw enum strings — the backend has no
+  per-value translation keys for `ProductState` / `ModerationState`. Untranslated
+  state labels are parity, not a gap. A future i18n pass (backend seed +
+  client lookup, both platforms) could translate them; it is out of scope here.
+
+- **Moderation-state filter has no mobile surface.** Admin was removed from mobile
+  (chat α). The moderation-state dropdown rendered only on the admin surface, so it
+  renders nowhere on mobile. The `selectedModerationStates` field and its plumbing
+  remain in the store as vestigial dead code, flagged for the Ω structural sweep —
+  `clearAllFilters` still resets it for completeness, but nothing populates it.
+
+### Deep-link seam (not implemented; must not be foreclosed)
+
+Mobile does not use a URL as its source of truth. A future feature may need to
+reconstruct filter/search state from a one-time external input (a deep-link URL's
+params) at app entry. Nothing implements this today, but the filter-state model
+must stay populatable from such an input. Chat D's category-preservation fix
+(navigating to the category path) is deep-link-compatible by construction: a cold
+deep-link to a category path produces the same input the in-app navigation does.
+
+The seam itself is `parseFiltersFromQueryParams` (`src/lib/utils/filtersUtil.ts`),
+present and uncalled (grep-confirmed zero callers). It is deliberately retained,
+not deleted. When deep-linking is built, that feature will need to:
+
+- add a wire-DTO-to-FilterState adapter (the parser emits the request
+  `ProductsFilterDTO` shape, not the store's `FilterState` shape — field names
+  differ: `filters` vs `selectedFilters`, `orderBy` vs `selectedOrder`,
+  `priceRange` vs `selectedPriceRange`);
+- source category context from the path (via `getCategoriesFromPath`), since the
+  parser does not produce category IDs;
+- extend the parser for product-state filters if/when a portal product-state
+  filter ships (the parser omits the state arrays today).
+
+### Chat D scope boundary
+
+Chat D adopts the four parity fixes and the `applyRandom` suppression above, plus
+two mobile-only correctness fixes with no web counterpart: the `<div>` runtime
+crash in the filter fall-through branch (RN has no `<div>`; both sites become
+`<View>`/`<Text>`), and the `setState`-during-render patterns in the two filter
+components. It also deletes a user-visible `Test123` debug placeholder on the
+catalog screen. Items deliberately left for the Ω structural sweep or separate
+triage: the vestigial moderation-state plumbing, the `SelectFilter`-not-dispatched
+gap that makes the `<div>` branch reachable, additional `console.error` logger
+violations, and the question of whether dialog-set filter changes should
+auto-refresh the list without a pull-to-refresh.

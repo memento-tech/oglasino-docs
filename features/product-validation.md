@@ -244,13 +244,20 @@ and its default `httpStatus`. The handler reads `httpStatus` on the
 driving code to pick the response status; `translationKey` is copied onto
 every field-error in the serialized response.
 
-The enum carries 42 constants total.
+The product-validation error contract spans 42 codes across
+`ProductErrorCode` (36) + `SystemErrorCode` + `UserErrorCode`. The six
+non-`ProductErrorCode` codes are `RATE_LIMITED`, `NOT_AUTHENTICATED`,
+`ACCESS_DENIED`, `INTERNAL_ERROR`, `NOT_OWNER` (on `SystemErrorCode`) and
+`USER_SETUP_INCOMPLETE` (on `UserErrorCode`), all behind the shared
+`ErrorCode` interface. The wire `code` strings are unique across the
+enums and the mobile i18n layer keys off `code`/`translationKey`, never
+the Java enum boundary.
 
 ### Cross-cutting (system-level, all endpoints)
 
 | Code                | Status | When                                                  | Translation key                       |
 | ------------------- | ------ | ----------------------------------------------------- | ------------------------------------- |
-| `RATE_LIMITED`      | 429    | Rate limit exceeded; `Retry-After` header set         | `product.system.rate_limited`         |
+| `RATE_LIMITED`      | 429    | Rate limit exceeded; `Retry-After` header set         | `system.rate_limited`                 |
 | `NOT_AUTHENTICATED` | 403    | Request not authenticated for a secure endpoint       | `product.system.not_authenticated`    |
 | `ACCESS_DENIED`     | 403    | Authenticated but lacks required role/permission      | `product.system.access_denied`        |
 | `INTERNAL_ERROR`    | 500    | Unhandled exception caught by `GlobalExceptionHandler`| `product.system.internal_error`       |
@@ -336,11 +343,11 @@ These existed but are deleted:
 
 **Contract intent — `free` is not part of the wire DTO.** Web has
 dropped `free` from its TypeScript wire shape; backend derives free-zone
-from `topCategory.isFreeZone()` server-side. A stale `private boolean
-free` field is still present on the backend `NewProductRequestDTO` Java
-class (Jackson will tolerate it on incoming JSON, but no production code
-reads it). Cleanup tracked in `issues.md`. New clients (mobile) must not
-send `free`.
+from `topCategory.isFreeZone()` server-side. The previously-stale
+`private boolean free` field on the backend `NewProductRequestDTO` Java
+class has been **fully removed** (field, getter, and setter all gone) —
+confirmed by the 2026-05-29 read-only backend verification. New clients
+(mobile) must not send `free`.
 
 ### `UpdateProductRequestDTO`
 
@@ -496,7 +503,7 @@ component, not in a Zustand store.
        - The Back button is enabled.
        - Directly below the action bar, the inline rate-limit message
          is visible in red and centered, rendered from
-         `product.system.rate_limited` ("You're making requests too
+         `system.rate_limited` ("You're making requests too
          quickly. Please wait a moment and try again.").
      This image is load-bearing because the disabled-Next-with-inline-
      reason pattern is the only place in the feature where a server
@@ -518,11 +525,18 @@ component, not in a Zustand store.
 - On mount (single-shot):
   1. Upload images to R2 via `/secure/images/upload-tokens` and direct
      PUT to the returned URLs. Progressive status: "Uploading images..."
-  2. POST `/secure/products/create` with the full DTO. Status:
+  2. POST `/api/secure/products/create` with the full DTO. Status:
      "Creating product..."
   3. On success: status "Created" + link to the new product.
 
 - **On failure at step 4:**
+  - **Orphan cleanup runs on any non-success create result** (validation
+    *and* transport/error), not just the error branch: if any new R2 keys
+    were uploaded this session, `cleanupOrphanImages(newKeys)` fires first
+    (fire-and-forget, `.catch(()=>{})`). Consequence: a subsequent retry
+    re-uploads from the in-memory image data. (The only non-success path
+    that does *not* clean is an image-upload throw before the POST, where
+    no keys were persisted yet.)
   - If `result.type === 'validation'` (400/422): render the errors as a
     list inside the popup, with a header
     (`DIALOG.new.product.create.failed.header`) listing each error's
@@ -533,8 +547,7 @@ component, not in a Zustand store.
       `__system`-only or unresolvable defaults to step 3.
     - **"Exit"** (`DIALOG.new.product.create.failed.exit`) — closes the
       popup.
-  - If `result.type === 'error'` (network, 5xx, unexpected): cleanup any
-    R2 keys uploaded this session via `cleanupOrphanImages`. Show generic
+  - If `result.type === 'error'` (network, 5xx, unexpected): show generic
     failure message + the same two-button UX, with a fixed step-3 jump
     on "Go back and fix."
   - If 429 at any sub-step: the parsed `__system` rate-limit message is
@@ -567,7 +580,7 @@ component, not in a Zustand store.
 
 ### Wire payload from step 4
 
-The POST `/secure/products/create` body strips `imagesData` (client-only
+The POST `/api/secure/products/create` body strips `imagesData` (client-only
 field, contains File objects). Sends every other field of
 `NewProductRequestDTO`.
 
@@ -580,7 +593,7 @@ Single page, all fields visible at once. Page:
 
 ### Page load
 
-- Fetch `GET /secure/products?productId=...` → returns the current
+- Fetch `GET /api/secure/products?productId=...` → returns the current
   product mapped to a `ProductEditState` (editable view-model: mutable
   wire fields plus immutable display fields such as `productState`,
   `topCategory`, `subCategory`, `finalCategory`, `regionAndCity`,
@@ -604,7 +617,7 @@ Single page, all fields visible at once. Page:
    to each field. Cannot save.
 3. **Image upload (if any new files):** same as create step 4. New keys
    uploaded; failures cleanup uploaded keys.
-4. **POST `/secure/products/update`** with the narrowed DTO.
+4. **POST `/api/secure/products/update`** with the narrowed DTO.
 5. **Server-side processing:**
    - Load persisted product. Owner check (`NOT_OWNER` → 403 if
      mismatch).
@@ -827,7 +840,7 @@ mobile can reuse it. Implementation: `productStepMapping.ts` (helpers:
 | ---- | ------------------------------------------------------------------------------------------------ |
 | 1    | `images` (errors from client validation only; server doesn't validate images directly)           |
 | 2    | `name`, `description`, `price`, `currency`, `topCategory`, `subCategory`, `finalCategory`        |
-| 3    | `filters` (any field starting with `filter.`)                                                    |
+| 3    | `filters` — `stepForField` matches exact `filters`, exact `filter`, and any field starting with `filter.` |
 | 4    | (none — step 4 is where errors land, not originate)                                              |
 
 `__system` only or unmappable codes fall back to step 3.
@@ -901,7 +914,7 @@ transition.
 change-detection (deep-equal against the baseline snapshot, no `oldX`
 fields on the wire) → client structural validation (same rules as
 create) → submit → on success refresh the snapshot from
-`GET /secure/products?productId=...`.
+`GET /api/secure/products?productId=...`.
 
 **Conditional rules:**
 
@@ -936,7 +949,7 @@ framings, not prescriptions.
 - **Rate-limit UX.** Web's `BasicInfoProductDialog` watches
   `productErrors[SYSTEM_ERROR_KEY]` and disables Next for a fixed 5 s
   backoff. Mobile equivalent: disable submit / next, surface the
-  `product.system.rate_limited` message inline. Retry-After parsing is
+  `system.rate_limited` message inline. Retry-After parsing is
   deferred on web and may stay deferred on mobile.
 - **Step-to-field routing on submit failure.** Web uses
   `productStepMapping.ts` and routes "Go back and fix" to the earliest
@@ -998,9 +1011,11 @@ validation refactor ships:
   in UI.
 - **`PRICE_REQUIRED` naming.** Misleading; means "price too low," not
   "missing." Cosmetic.
-- **Dead `free` field on backend `NewProductRequestDTO`.** Web has
-  dropped it; backend still carries the field with zero readers. Cleanup
-  chore.
+- **Dead `free` field on backend `NewProductRequestDTO` — DONE.** The
+  field, getter, and setter are fully removed from the backend Java class
+  (confirmed by the 2026-05-29 backend verification). The matching
+  `issues.md` cleanup entry is left for Igor to close in his post-smoke
+  pass.
 - **`regionAndCity` unread in `createProductSchema`.** Cosmetic.
 - **`field-price` scroll target is a no-op on update page.** Inline
   error renders; only the scroll-into-view fails.

@@ -141,7 +141,7 @@ Admin-initiated bans go through `DefaultUsersFacade.disableUser(userId, banReaso
 On the next request from this user:
 
 - If their refresh token has expired: Firebase rejects token verification. The backend never sees an authenticated request; the frontend's `onIdTokenChanged` fires with null, signs them out, navigation drops them from any protected page, the ban-notice dialog renders.
-- If their refresh token hasn't yet hit Firebase: the backend's `FirebaseAuthFilter` reads `authData.disabled()` from the (just-evicted) Redis cache, sees true, returns 403 with body `{errors: [{field: null, code: 'USER_BANNED', translationKey: 'errors.user.banned'}]}`. The axios global 403 interceptor catches this specific code, signs out, sets a sessionStorage flag, navigation completes, the ban-notice dialog renders.
+- If their refresh token hasn't yet hit Firebase: the backend's `FirebaseAuthFilter` reads `authData.disabled()` from the (just-evicted) Redis cache, sees true, returns 403 with body `{errors: [{field: null, code: 'USER_BANNED', translationKey: 'user.banned'}]}`. The axios global 403 interceptor catches this specific code, signs out, sets the `accountBanned` flag on `useAuthStore` (see §14.4), navigation completes, the ban-notice dialog renders.
 
 ### 3.5a Banned-user content hiding
 
@@ -237,7 +237,7 @@ The confirmation dialog:
 1. Tells the user what will happen ("Your profile will remain visible for 7 days with a 'Scheduled for deletion' badge. Your listings will be hidden. You will be signed out. You can restore your account at any time during these 7 days by signing back in. After 7 days, your account is permanently deleted.").
 2. Asks the user to re-authenticate. For email/password users: a password input + "Delete my account" button. For Google users: a single "Reauthenticate with Google and delete" button that triggers the popup. (Facebook case included for future enablement — see §14.2.)
 3. On successful reauth, frontend calls `getIdToken(true)`, passes the fresh token explicitly on the delete request.
-4. On success: backend returns `scheduledDeletionAt`. Frontend writes `sessionStorage.setItem('account-just-deleted', scheduledDeletionAt)`, signs the user out (`auth.signOut()`), which triggers `SessionGuard` to redirect from the protected dashboard to `/{locale}/`. On root layout mount, the sessionStorage key is detected, the post-deletion dialog opens with the date, and the key is removed.
+4. On success: backend returns `scheduledDeletionAt`. Frontend sets the `accountJustDeleted` flag on `useAuthStore` (carrying `scheduledDeletionAt`) and signs the user out (`auth.signOut()`), which triggers `SessionGuard` to redirect from the protected dashboard to `/{locale}/`. `AccountStateDialogsInit` reacts to the flag, opens the post-deletion dialog with the date, and clears the flag in the same effect. See §14.4 for the canonical mechanism.
 5. On reauth failure: dialog shows the error, button remains.
 6. On backend rejection with `REAUTH_REQUIRED`: dialog shows "Please re-authenticate again" and resets.
 7. On backend rejection with `USER_LOCKED_FROM_DELETION`: dialog shows the generic "Account deletion is currently restricted. Please contact support@oglasino.com" message.
@@ -330,10 +330,10 @@ The user is signed out on next interaction. They see the ban-notice dialog (§4.
 
 A banned user attempts to use the platform. One of two trigger paths fires:
 
-- **At sign-in**: Firebase rejects the credentials (because `setDisabled` is true) or `syncUserToBackend` returns `disabled: true`/`USER_BANNED`/`EMAIL_BANNED`. Frontend signs out and sets `sessionStorage.setItem('account-banned', '1')`.
-- **Mid-session**: Backend returns `403 + USER_BANNED` for an authenticated request the user issues. Global axios interceptor signs out and sets the sessionStorage flag.
+- **At sign-in**: Firebase rejects the credentials (because `setDisabled` is true) or `syncUserToBackend` returns `disabled: true`/`USER_BANNED`/`EMAIL_BANNED`. Frontend signs out and sets the `accountBanned` flag on `useAuthStore`.
+- **Mid-session**: Backend returns `403 + USER_BANNED` for an authenticated request the user issues. Global axios interceptor signs out and sets the `accountBanned` flag.
 
-In both cases, the sign-out causes `SessionGuard` (if on a protected page) to redirect to `/{locale}/`. On the root layout mount of the next route, the sessionStorage flag is detected; the ban-notice dialog opens; the key is removed.
+In both cases, the sign-out causes `SessionGuard` (if on a protected page) to redirect to `/{locale}/`. `AccountStateDialogsInit` reacts to the `accountBanned` flag, opens the ban-notice dialog, and clears the flag in the same effect. See §14.4 / §14.10 for the canonical mechanism.
 
 The dialog content:
 
@@ -357,8 +357,8 @@ A user attempts to register (or sign in via Google with a previously-banned emai
 2. Frontend's `buildUserSession` → `syncUserToBackend` POSTs to `/auth/firebase-sync`.
 3. Backend's `firebase-sync` handler hashes the incoming token's email and checks against `banned_user_audit`. If an unexpired hash matches:
    - Backend deletes the just-created Firebase user (`FirebaseAuth.deleteUser(uid)`), to avoid leaving an orphan in Firebase.
-   - Backend returns 403 + `{errors: [{field: null, code: 'EMAIL_BANNED', translationKey: 'errors.email.banned'}]}`.
-4. Frontend's `syncUserToBackend` catches the rejection, sets the `account-banned` sessionStorage flag, signs the user out, navigation lands on the home page, the ban-notice dialog opens.
+   - Backend returns 403 + `{errors: [{field: null, code: 'EMAIL_BANNED', translationKey: 'email.banned'}]}`.
+4. Frontend's `syncUserToBackend` catches the rejection, sets the `accountBanned` flag on `useAuthStore` (see §14.4), signs the user out, navigation lands on the home page, the ban-notice dialog opens.
 
 The check happens server-side at the only entry point where a new user record would be created. The frontend has no role in the ban check — it just handles the response.
 
@@ -952,10 +952,10 @@ After hard delete, `/api/auth/firebase/{uid}` returns null (preserves existing 4
 
 | Code                        | HTTP | Where emitted                                                          | Translation key                    |
 | --------------------------- | ---- | ---------------------------------------------------------------------- | ---------------------------------- |
-| `REAUTH_REQUIRED`           | 403  | Delete-account endpoint when `auth_time` is too old.                   | `errors.reauth.required`           |
-| `USER_BANNED`               | 403  | Auth filter when `disabled=true`; also from `firebase-sync` if banned. | `errors.user.banned`               |
-| `EMAIL_BANNED`              | 403  | `firebase-sync` when registration attempt matches banned hash.         | `errors.email.banned`              |
-| `USER_LOCKED_FROM_DELETION` | 403  | Delete-account endpoint when user has active lock.                     | `errors.user.locked.from.deletion` |
+| `REAUTH_REQUIRED`           | 403  | Delete-account endpoint when `auth_time` is too old.                   | `reauth.required`           |
+| `USER_BANNED`               | 403  | Auth filter when `disabled=true`; also from `firebase-sync` if banned. | `user.banned`               |
+| `EMAIL_BANNED`              | 403  | `firebase-sync` when registration attempt matches banned hash.         | `email.banned`              |
+| `USER_LOCKED_FROM_DELETION` | 403  | Delete-account endpoint when user has active lock.                     | `user.locked.from.deletion` |
 | `USER_NOT_PENDING_DELETION` | 400  | Defensive — if a restore is somehow called on a non-pending user.      | `errors.user.not.pending.deletion` |
 
 All use the existing `{errors: [{field, code, translationKey}]}` envelope.
@@ -1072,7 +1072,7 @@ The FK CASCADE on `report.banned_user_audit_id` deletes linked reports automatic
 1. Verify Firebase ID token (existing).
 2. Look up cached AuthenticatedUserDTO (existing).
 3. NEW: If authData.disabled == true:
-   - Return HTTP 403 with body {errors: [{field: null, code: 'USER_BANNED', translationKey: 'errors.user.banned'}]}.
+   - Return HTTP 403 with body {errors: [{field: null, code: 'USER_BANNED', translationKey: 'user.banned'}]}.
    - Short-circuit; do not invoke filterChain.doFilter.
 4. NEW: If authData.deletionStatus == 'PENDING_DELETION':
    - Load full User entity (single DB hit — we need to do the cancellation work).
@@ -1094,7 +1094,7 @@ The `firebase-sync` endpoint exemption (filter doesn't run token verification fo
 3. Check userAuditService.isEmailBanned(email).
    - If banned:
      - Delete the Firebase user just created (best-effort).
-     - Return HTTP 403 with body {errors: [{field: null, code: 'EMAIL_BANNED', translationKey: 'errors.email.banned'}]}.
+     - Return HTTP 403 with body {errors: [{field: null, code: 'EMAIL_BANNED', translationKey: 'email.banned'}]}.
 4. getOrCreateUser as today.
 5. NEW: if user.disabled == true:
    - Return HTTP 403 + USER_BANNED.
@@ -1259,11 +1259,11 @@ After successful reauth, the dialog runs:
    - HTTP 403 + `REAUTH_REQUIRED`: dialog shows "Please re-authenticate again," resets.
    - HTTP 403 + `USER_LOCKED_FROM_DELETION`: dialog shows the generic restricted message; button disabled.
    - HTTP 5xx: generic error with retry.
-4. Write `sessionStorage.setItem('account-just-deleted', scheduledDeletionAt)`. (This is the **primary** trigger for the post-deletion dialog. See §14.4.)
+4. Set `useAuthStore.getState().setAccountJustDeleted({ scheduledDeletionAt })`. (This is the **primary** trigger for the post-deletion dialog. See §14.4.)
 5. Sign the user out: `await auth.signOut()`.
 6. `SessionGuard` reacts to `auth.currentUser` becoming null and redirects from the protected `/owner/user` page to `/{locale}/`.
 
-The post-deletion dialog opens on the next page's mount via the sessionStorage flag. The current confirmation dialog dismisses when the user is signed out.
+The post-deletion dialog opens via the `accountJustDeleted` store flag — `AccountStateDialogsInit` reacts to it and clears it in the same effect (see §14.4). The current confirmation dialog dismisses when the user is signed out.
 
 ### 14.4 Post-deletion confirmation dialog
 
@@ -1551,62 +1551,67 @@ These changes flow through the codebase via TypeScript compile errors until all 
 
 ### 15.1 `COMMON` namespace
 
-| Key                                        | English value            |
-| ------------------------------------------ | ------------------------ |
-| `common.user.deleted`                      | "Deleted User"           |
-| `common.user.scheduled.for.deletion.label` | "Scheduled for deletion" |
+Keys below are the **seeded leaf** strings (what the frontend passes to `tCommon(...)`); the `COMMON` namespace is the table, not part of the key.
+
+| Key                                 | English value            |
+| ----------------------------------- | ------------------------ |
+| `user.deleted`                      | "Deleted User"           |
+| `user.scheduled.for.deletion.label` | "Scheduled for deletion" |
+| `user.banned.label`                 | "Banned"                 |
 
 ### 15.2 `COMMON_SYSTEM` namespace
 
-| Key                                       | English value                                                              |
-| ----------------------------------------- | -------------------------------------------------------------------------- |
-| `common.system.account.restored.title`    | "Welcome back"                                                             |
-| `common.system.account.restored.subtitle` | "Your account has been restored. The pending deletion has been cancelled." |
+| Key                          | English value                                                              |
+| ---------------------------- | -------------------------------------------------------------------------- |
+| `account.restored.title`     | "Welcome back"                                                             |
+| `account.restored.subtitle`  | "Your account has been restored. The pending deletion has been cancelled." |
 
 ### 15.3 `BUTTONS` namespace
 
-| Key                                       | English value                           |
-| ----------------------------------------- | --------------------------------------- |
-| `buttons.delete.account.label`            | "Delete my account"                     |
-| `buttons.reauthenticate.and.delete.label` | "Reauthenticate with Google and delete" |
-| `buttons.banned.go.home.label`            | "Go to home"                            |
-| `buttons.account.deleted.go.home.label`   | "Go to home"                            |
+| Key                                | English value                           |
+| ---------------------------------- | --------------------------------------- |
+| `delete.account.label`             | "Delete my account"                     |
+| `reauthenticate.and.delete.label`  | "Reauthenticate with Google and delete" |
+| `banned.go.home.label`             | "Go to home"                            |
+| `account.deleted.acknowledge.label`| "OK"                                    |
 
 ### 15.4 `DASHBOARD_PAGES` namespace
 
-| Key                                                          | English value                                                                                                    |
-| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `dashboard.pages.danger.zone.label`                          | "Danger Zone"                                                                                                    |
-| `dashboard.pages.delete.account.title`                       | "Delete your account"                                                                                            |
-| `dashboard.pages.delete.account.bullet.listings`             | "Hide your listings from all users"                                                                              |
-| `dashboard.pages.delete.account.bullet.profile.badge`        | "Show a 'Scheduled for deletion' badge on your profile for 7 days"                                               |
-| `dashboard.pages.delete.account.bullet.messaging`            | "Disable messaging to and from your account"                                                                     |
-| `dashboard.pages.delete.account.bullet.signout`              | "Sign you out"                                                                                                   |
-| `dashboard.pages.delete.account.restore.note`                | "You can sign in within 7 days to restore your account. After 7 days, your account is permanently deleted."      |
-| `dashboard.pages.delete.account.modal.title`                 | "Delete Account"                                                                                                 |
-| `dashboard.pages.delete.account.modal.body.password`         | "This action is permanent after 7 days. Re-enter your password to confirm."                                      |
-| `dashboard.pages.delete.account.modal.body.google`           | "This action is permanent after 7 days. We need to verify your identity before deleting your account."           |
-| `dashboard.pages.delete.account.modal.password.label`        | "Password"                                                                                                       |
-| `dashboard.pages.delete.account.modal.cancel.label`          | "Cancel"                                                                                                         |
-| `dashboard.pages.account.deleted.dialog.title`               | "Your account has been scheduled for deletion."                                                                  |
-| `dashboard.pages.account.deleted.dialog.scheduled.date`      | "It will be permanently deleted on {date}."                                                                      |
-| `dashboard.pages.account.deleted.dialog.restore.instruction` | "To restore your account, sign in within 7 days. After that, your account and all data are permanently removed." |
+The post-deletion dialog keys (`account.deleted.dialog.*`) are seeded under `DIALOG`, not here — see §15.7.
+
+| Key                                     | English value                                                                                              |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `danger.zone.label`                     | "Danger Zone"                                                                                              |
+| `delete.account.title`                  | "Delete your account"                                                                                      |
+| `delete.account.bullet.listings`        | "Hide your listings from all users"                                                                        |
+| `delete.account.bullet.profile.badge`   | "Show a 'Scheduled for deletion' badge on your profile for 7 days"                                         |
+| `delete.account.bullet.messaging`       | "Disable messaging to and from your account"                                                               |
+| `delete.account.bullet.signout`         | "Sign you out"                                                                                             |
+| `delete.account.restore.note`           | "You can sign in within 7 days to restore your account. After 7 days, your account is permanently deleted." |
+| `delete.account.modal.title`            | "Delete Account"                                                                                           |
+| `delete.account.modal.body.password`    | "This action is permanent after 7 days. Re-enter your password to confirm."                                |
+| `delete.account.modal.body.google`      | "This action is permanent after 7 days. We need to verify your identity before deleting your account."     |
+| `delete.account.modal.password.label`   | "Password"                                                                                                 |
+| `delete.account.modal.cancel.label`     | "Cancel"                                                                                                   |
 
 ### 15.5 `MESSAGES_PAGE` namespace
 
-| Key                                          | English value                                                                     |
-| -------------------------------------------- | --------------------------------------------------------------------------------- |
-| `messages.page.user.pending.deletion.notice` | "This user has scheduled their account for deletion and cannot receive messages." |
+| Key                             | English value                                                                     |
+| ------------------------------- | --------------------------------------------------------------------------------- |
+| `user.pending.deletion.notice`  | "This user has scheduled their account for deletion and cannot receive messages." |
+| `user.banned.notice`            | "This user has been banned and cannot receive messages."                          |
 
 ### 15.6 `ERRORS` namespace
 
 | Key                                | English value                                                                    |
 | ---------------------------------- | -------------------------------------------------------------------------------- |
-| `errors.reauth.required`           | "Please re-authenticate to continue."                                            |
-| `errors.user.banned`               | "Your account has been banned."                                                  |
-| `errors.email.banned`              | "This email address is not eligible for registration."                           |
-| `errors.user.locked.from.deletion` | "Account deletion is currently restricted. Please contact support@oglasino.com." |
+| `reauth.required`           | "Please re-authenticate to continue."                                            |
+| `user.banned`               | "Your account has been banned."                                                  |
+| `email.banned`              | "This email address is not eligible for registration."                           |
+| `user.locked.from.deletion` | "Account deletion is currently restricted. Please contact support@oglasino.com." |
 | `errors.user.not.pending.deletion` | "Your account is not in a pending-deletion state."                               |
+
+> **Note:** `errors.user.not.pending.deletion` is the one §15 key still carrying a namespace prefix. It maps to `USER_NOT_PENDING_DELETION` (see §8.8) — the defensive 400 on a non-pending restore, a path that never reaches mobile (mobile restoration is the `firebase-sync` header path). Its seeded leaf form was not independently confirmed this pass, so it is left as-is rather than stripped on assumption. Strip to the seeded leaf when a backend read confirms the form; zero mobile impact until then.
 
 ### 15.7 `DIALOG` namespace
 
@@ -1619,9 +1624,17 @@ The four banned-dialog keys (`banned.dialog.title`, `banned.dialog.body.first`, 
 | `banned.dialog.body.delete.intro` | "If you want to delete your account permanently, email support@oglasino.com with the subject 'Account deletion request.' We will respond within 30 days as required by data-protection law." |
 | `banned.dialog.body.duration`     | "Each account ban lasts at most 12 months. After that period, the email associated with the banned account becomes eligible for re-registration if you wish to create a new account."        |
 
+The three post-deletion dialog keys below are seeded under `DIALOG` (moved here from the §15.4 DASHBOARD_PAGES table, which listed them in error):
+
+| Key                                       | English value                                                                                                   |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `account.deleted.dialog.title`            | "Your account has been scheduled for deletion."                                                                  |
+| `account.deleted.dialog.scheduled.date`   | "It will be permanently deleted on {date}."                                                                      |
+| `account.deleted.dialog.restore.instruction` | "To restore your account, sign in within 7 days. After that, your account and all data are permanently removed." |
+
 ### 15.8 Translation key collision check
 
-Per conventions Part 6 Rule 2. All new keys are leaves; no parent-leaf collisions exist.
+Per conventions Part 6 Rule 2. All keys are stored leaf-only — the namespace is the table/column, not part of the key string. After the leaf-only strip, every key in §15.1–§15.7 remains a leaf and no parent-child collision exists within any namespace: each `*.dialog.*`, `delete.account.*`, and `user.*` family nests under a node that is never itself a seeded leaf (e.g. `delete.account` carries `.title`, `.bullet.*`, `.modal.*`, `.restore.note` but no bare `delete.account` leaf; `account.deleted.dialog` carries `.title`, `.scheduled.date`, `.restore.instruction` but no bare leaf). The one key still prefixed (`errors.user.not.pending.deletion`, §15.6) is noted there pending backend confirmation of its seeded leaf form.
 
 ---
 
@@ -1841,9 +1854,9 @@ Per Phase 3 finding 2.4, the report-submit endpoint has no authorization check o
 
 ### 19.9 Mobile adoption
 
-`oglasino-expo` adopts the user-deletion feature in a separate Mastermind chat post-merge.
+`oglasino-expo` adopts the user-deletion feature in a separate Mastermind chat post-merge. **In progress — see §21 (Platform adoption — mobile)** for the adoption decisions and platform deltas.
 
-**Trigger to revisit:** automatic after merge.
+**Trigger to revisit:** n/a — adoption underway.
 
 ### 19.10 Reverse Firebase orphan cleanup
 
@@ -1919,6 +1932,65 @@ When feature ships:
 
 - Move "User deletion" from backlog to `shipped`.
 - Remove "Account-disabling & token-revocation enforcement" from backlog (subsumed).
+
+---
+
+## 21. Platform adoption (mobile)
+
+This section documents the `oglasino-expo` adoption of user deletion, captured from the mobile Mastermind chat (three read-only reference audits — backend, web, expo current-state — plus seam analysis). It is the realization of the mobile-adoption item deferred in §19.9.
+
+Mobile is **consumer-only** (the admin module was removed from `oglasino-expo`). Mobile adds **no backend endpoints, no error codes, and no translation keys** — it consumes the existing contract. The binding principle: **mobile must not differ behaviorally from web/backend.** Where the transport differs it is because the platform differs (no httpOnly cookie, no SSR, no Next.js data cache); in every such case the behavioral outcome is identical.
+
+### 21.1 What mobile mirrors unchanged
+
+- The entire backend contract: the delete endpoint (§10.2), `firebase-sync` (§10.1), the public user DTO (§8.7), the phone-number gate (§14.7), and the auth-filter behavior — C-3 (PENDING_DELETION drops auth context and continues anonymously) and C-4 (disabled → 403 `USER_BANNED`).
+- The user-facing flow: danger zone → reauth → delete → signed out → post-deletion dialog; sign-in-to-restore → restoration dialog; ban → ban-notice dialog.
+- Restoration is sign-in-only (auth-contract C-2). The token-refresh listener does not restore; the response interceptor reads `X-Account-Restored: true` and sets the `restored` flag (already wired in mobile's foundation work).
+- `UserState.resolve` composition: **BANNED wins over PENDING_DELETION** (§8.7).
+- The error envelope `{errors:[{field, code, translationKey}]}`, parsed by mobile's existing `parseServiceError`.
+
+### 21.2 Where mobile necessarily differs from web (platform deltas)
+
+| Concern | Web mechanism | Mobile mechanism | Why the transport differs |
+| --- | --- | --- | --- |
+| Fresh-token transport | Per-call `Authorization: Bearer <freshToken>` header override on the delete request | `getIdToken(true)` **immediately before** the delete call, so the request interceptor attaches the freshly-minted token | Mobile's request interceptor unconditionally overwrites `Authorization`; a per-call override is silently clobbered. Outcome is identical: a token with recent `auth_time` reaches the backend. |
+| Post-deletion / ban / restore handoff | Zustand store flags on `useAuthStore` (NOT sessionStorage — see §14.4) | Zustand store flags on the mobile auth store | Mobile has no sessionStorage; both platforms already use store flags. |
+| Store-flag shape | Object shapes (`accountBanned: {reason} \| null`, `accountJustDeleted: {scheduledDeletionAt} \| null`) | Boolean/string (`accountBanned: boolean`, `accountJustDeleted: string \| null` carrying `scheduledDeletionAt`) | Matches mobile's existing `restored: boolean` convention. The ban dialog is reason-less on both platforms (web always passes `{reason: null}`), so no information is lost. |
+| Cookie clear (C-5 cookie half) | Clears the httpOnly `firebase_token` cookie before navigation | No-op | Mobile's token is in-memory; there is no SSR cookie. The SSR stale-token race C-5 defends against cannot occur on mobile (no SSR). |
+| Cache revalidation | `revalidateUserCache` / `router.refresh` | No-op | Mobile has no Next.js data cache. |
+| Navigation after sign-out | `router.replace(\`/${locale}\`)` | expo-router navigation to home | Same intent; native navigation primitive. |
+
+### 21.3 `scheduledDeletionAt` source on mobile
+
+Mobile reads `scheduledDeletionAt` from the **delete response** (§10.2) and the **public-user DTO projection path** (§8.7). It is **never** read from `firebase-sync` — that response carries the field but it is always null there (no User-side source). Mobile has no follows-list date surface, so the follows-list projection's omission of `scheduledDeletionAt` is moot.
+
+### 21.4 Reauth on mobile
+
+- **Email/password:** `reauthenticateWithCredential` + `EmailAuthProvider.credential` (same as web).
+- **Google:** the `@react-native-google-signin` native flow (NOT web's `reauthenticateWithPopup`).
+- **Provider detection:** `auth.currentUser.providerData[0].providerId` (same as web).
+- The reauth dialog is a **bespoke mobile component** — the existing `InfoDialog` has neither a text input nor an auto-dismiss timer. `ReportDialog` / `LoginDialog` are the precedents for a dialog with body content + input + confirm/cancel.
+
+### 21.5 translationKeys (leaf-only)
+
+Mobile keys off the backend-emitted leaf strings within the `ERRORS` namespace: `reauth.required`, `user.locked.from.deletion`, `user.banned`, `email.banned` — no `errors.` prefix on the leaf (see §8.8 and §15.6). Mobile seeds no keys; all are backend-seeded and fetched at boot across the six namespaces the feature touches (DASHBOARD_PAGES, BUTTONS, DIALOG, MESSAGES_PAGE, COMMON, ERRORS).
+
+### 21.6 Badges and messaging gating (the gap mobile fills)
+
+Mobile's chat currently handles only the post-hard-delete case (a deleted-peer guard rendering the "Deleted User" placeholder). It has **no grace-period badge and no PENDING_DELETION / BANNED send-gate** — the recent mobile messaging adoption did not wire state-based gating. This feature fills that gap: a `ScheduledForDeletionBadge` equivalent, the `cannotSend` extension to PENDING_DELETION + BANNED in the chat header and conversation list, and the pending/banned notices below the input. Keys are reused from MESSAGES_PAGE / COMMON.
+
+### 21.7 DTO fields added on mobile
+
+- `AuthUserDTO` (the signed-in self): `disabled`, `banReason`, `deletionStatus`, `scheduledDeletionAt`.
+- `UserInfoDTO` (a viewed/peer user): `state`, `scheduledDeletionAt`.
+
+This split mirrors web: the self DTO expresses the banned condition via the `disabled` boolean + `deletionStatus`; the peer DTO uses the `state` tri-state, which folds BANNED.
+
+### 21.8 Delivery and acceptance
+
+Mobile work lands on branch `new-expo-dev` (the operator's Expo isolation strategy; all Expo work is uncommitted on that branch). Code-complete is not shipped: the feature is **not `mobile-stable` until on-device manual verification passes.** On-device verification runs the consumer-facing subset of [`user-deletion-test-cases.md`](user-deletion-test-cases.md) (the admin-only cases are N/A — mobile is consumer-only); a mobile-specific test addendum may be authored at close. Mobile adoption carries forward the standing testing-infrastructure gap (no automated RN tests for this flow).
+
+The consumer-facing Ψ subset of [`user-deletion-test-cases.md`](user-deletion-test-cases.md) for mobile is: **Cases 1, 2, 3, 5, 11, 15, 16, 17** — self-deletion (email/password and Google), restoration by sign-in, the ban-notice dialog on sign-in, re-registration with a banned email, and the three counterparty messaging-gating cases (pending-deletion, banned, and banned-wins-over-pending). All admin-side cases (4, 6–10, 12–14, 18–25) are N/A — `oglasino-expo` is consumer-only (admin was removed). Mobile is `mobile-stable` only once this subset passes on-device on both iOS and Android.
 
 ---
 

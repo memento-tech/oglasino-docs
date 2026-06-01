@@ -46,7 +46,7 @@ Reproducing the 2026-05-18 manual test against this surface map:
 | T+0.1  | `getIdToken(true)` mints fresh token                                            | fresh token + auth_time     | (unchanged)                                                  | (unchanged)       | —                  | —                      | —                             |
 | T+0.15 | `userService.deleteCurrentUser(freshToken)` submits                             | —                           | (unchanged)                                                  | (unchanged)       | —                  | (verifies fresh token) | ACTIVE → flipping...          |
 | T+1.5  | `me/delete` commits                                                             | —                           | old token                                                    | old token         | —                  | evicted                | **PENDING_DELETION**          |
-| T+1.6  | `sessionStorage.setItem('account-just-deleted')`                                | —                           | —                                                            | —                 | —                  | —                      | —                             |
+| T+1.6  | set `accountJustDeleted` on `useAuthStore`                                       | —                           | —                                                            | —                 | —                  | —                      | —                             |
 | T+1.7  | `auth.signOut()`                                                                | **null**                    | (still old token; cookie clear is in flight)                 | (still old token) | —                  | —                      | —                             |
 | T+1.7  | `onIdTokenChanged(null)` fires                                                  | —                           | clear in flight (Step 1: POST to /api/auth/token)            | (unchanged)       | —                  | —                      | —                             |
 | T+1.7  | `onClose()` + `router.replace('/')`                                             | —                           | (clear still in flight)                                      | (unchanged)       | —                  | —                      | —                             |
@@ -106,7 +106,7 @@ Unchanged from spec §10 step 3. Banned users get a hard rejection at the filter
 `DeleteAccountConfirmationDialog`'s success path:
 
 1. Submit deletion (`userService.deleteCurrentUser(freshToken)`).
-2. On 200: `sessionStorage.setItem('account-just-deleted', scheduledDeletionAt)`.
+2. On 200: set `accountJustDeleted` on `useAuthStore` (carrying `scheduledDeletionAt`). Web and mobile both use a Zustand store flag; see spec §14.4. This replaces the retired sessionStorage mechanism.
 3. **`await auth.signOut()`** — completes Firebase client-side sign-out.
 4. **`await clearFirebaseTokenCookie()`** — explicitly POST `/api/auth/token` with `{token: null}` and wait for the response. This is the new step. Today the `UseTokenRefresh` listener handles cookie clearing asynchronously via `onIdTokenChanged(null)`; the success path does not wait for it.
 5. `onClose()` — dismiss the dialog.
@@ -170,7 +170,7 @@ This is the reference timeline once the contract is in force. Every surface's be
 | 3. `getIdToken(true)`                                                                                    | S1 mints fresh ID token                                          | —                                                 |
 | 4. `useAuthStore.setDeletionInFlight(true)`                                                              | (flag set)                                                       | C-6                                               |
 | 5. POST `/me/delete` with fresh token                                                                    | S6: PENDING_DELETION committed, request row inserted, S5 evicted | C-1                                               |
-| 6. `sessionStorage.setItem('account-just-deleted')`                                                      | (UI handoff)                                                     | —                                                 |
+| 6. set `accountJustDeleted` on `useAuthStore`                                                            | (UI handoff)                                                     | —                                                 |
 | 7. `await auth.signOut()`                                                                                | S1: `auth.currentUser = null`                                    | —                                                 |
 | 8. `await clearFirebaseTokenCookie()`                                                                    | S2: cookie cleared on the server before response returns         | C-5                                               |
 | 9. `useAuthStore.setDeletionInFlight(false)`                                                             | (flag cleared in `finally`)                                      | C-6                                               |
@@ -178,7 +178,7 @@ This is the reference timeline once the contract is in force. Every surface's be
 | 11. Browser navigates with cleared cookie                                                                | S2: absent → SSR sees no token                                   | C-5 + C-8                                         |
 | 12. Next.js SSR for `/<locale>` calls backend with no Authorization                                      | S4: anonymous                                                    | C-8                                               |
 | 13. Backend processes as anonymous request                                                               | S5: no lookup; S6: untouched                                     | C-3 (would also kick in if a stale token arrived) |
-| 14. Root layout mounts → `AccountStateDialogsInit` reads sessionStorage → post-deletion dialog opens     | (UI)                                                             | —                                                 |
+| 14. `AccountStateDialogsInit` reacts to the `accountJustDeleted` flag → post-deletion dialog opens, flag cleared in the same effect | (UI)                                                             | —                                                 |
 | 15. Subsequent days: cron eventually finds the PENDING request, runs `executeScheduledDeletion` at Day 7 | S6: user row deleted                                             | spec §4.5 unchanged                               |
 
 ### Restoration (user signs back in within 7 days)
@@ -320,7 +320,7 @@ When this contract is finalized and the briefs land, the following sections of `
 
   > 5. Set `deletionInFlight = true` on `useAuthStore` (cleared in `finally`).
   > 6. Submit deletion request with the fresh token.
-  > 7. On 200: write `sessionStorage['account-just-deleted']`.
+  > 7. On 200: set `accountJustDeleted` on `useAuthStore` (carrying `scheduledDeletionAt`).
   > 8. `await auth.signOut()`.
   > 9. `await clearFirebaseTokenCookie()`.
   > 10. `onClose()`; `router.replace(\`/${locale}\`)`.

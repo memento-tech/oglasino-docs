@@ -21,7 +21,7 @@ broader beta group is needed.
 Specifics (signing key alias, service account JSON for Play Console
 upload) populated during Phase 3E.4 of
 [`../master-plan.md`](../master-plan.md). Cross-reference
-[`../expo/eas-configuration.md`](../expo/eas-configuration.md).
+[`../expo/cloud-setup.md`](../expo/cloud-setup.md).
 
 ## Internal Testing setup
 

@@ -23,12 +23,11 @@ In scope:
 
 - New `ConsentData` shape carrying all four Consent Mode v2 signals
 - New `og_consent` cookie, separate from `globalCookie`
-- One-time migration path from `globalCookie.cookieConsent` to `og_consent`
 - Inline SSR consent-defaults snippet emitted from `app/layout.tsx`
 - Banner UX rebuild: twin Accept-all / Reject-all primaries, Customize expander
 - Footer "Manage cookie preferences" link, reopens the same Drawer
 - Card-size and language cookies gated behind `preference` category
-- Logged-in settings toggle at `/owner/user` updated to write back to `og_consent`
+- Logged-in settings toggle at `/owner/cookies` updated to write back to `og_consent`
 - Dead-code cleanup: delete `firebaseAnalytics.ts` and the `PREFERENCE_COOKIE_NAME` alias
 - Translation seeds for the new banner copy across EN / RS / RU / CNR
 
@@ -73,7 +72,7 @@ export type ConsentData = {
 
 `necessary` and the three `ad_*` signals are typed as literal values so TypeScript catches any attempt to set them otherwise.
 
-`version: 1` future-proofs the cookie. If the shape ever changes, the migration logic reads the version and adapts.
+`version: 1` future-proofs the cookie. If the shape ever changes, a future reader can use the version field to adapt.
 
 ### Default state for first-time visitors
 
@@ -125,57 +124,9 @@ Language persistence is URL-only in this codebase today; no language cookie writ
 
 ### Migration
 
-Existing users have `globalCookie.cookieConsent` set with the old `{ necessary, preference }` shape. Migration runs in two places:
+**Not built.** The originally-planned one-time `globalCookie.cookieConsent → og_consent` migration (a client-side banner-mount read plus a server-side SSR fallback) was never implemented — it was superseded by the cookies-closing work. There is no migration code in `oglasino-web`: `og_consent` is the sole consent cookie and there is no legacy-cookie fallback path. (Re-confirmed against current `oglasino-web` code, 2026-06-01.)
 
-**Client-side, in the banner mount effect:**
-
-```ts
-if (!getOgConsent()) {
-  const legacy = getGlobalCookie()?.cookieConsent;
-  if (legacy) {
-    writeOgConsent({
-      necessary: 'granted',
-      analytics_storage: 'denied', // legacy users never opted into analytics
-      preference: legacy.preference ? 'granted' : 'denied',
-      ad_storage: 'denied',
-      ad_user_data: 'denied',
-      ad_personalization: 'denied',
-      version: 1,
-      decidedAt: Math.floor(Date.now() / 1000),
-    });
-    return; // banner stays hidden
-  }
-}
-```
-
-**Server-side, in the SSR snippet:**
-
-```ts
-const ogConsent = cookies().get('og_consent')?.value;
-let consent: ConsentData | null = ogConsent ? safeParse(ogConsent) : null;
-
-if (!consent) {
-  // Legacy fallback
-  const global = cookies().get('globalCookie')?.value;
-  const legacy = global ? safeParse(global)?.cookieConsent : null;
-  if (legacy) {
-    consent = {
-      necessary: 'granted',
-      analytics_storage: 'denied',
-      preference: legacy.preference ? 'granted' : 'denied',
-      ad_storage: 'denied',
-      ad_user_data: 'denied',
-      ad_personalization: 'denied',
-      version: 1,
-      decidedAt: 0, // unknown
-    };
-  }
-}
-```
-
-The fallback parses `globalCookie` on every SSR request for the migration window. After 60 days post-launch, the fallback is removed. A follow-up `chore/<slug>` task tracks the cleanup.
-
-The legacy `cookieConsent` field is also removed from the `GlobalCookie` type during this feature. Any code that writes `globalCookie` after this feature will no longer include `cookieConsent`, so the legacy value naturally expires from cookies as users get re-served.
+The legacy `cookieConsent` field was removed from the `GlobalCookie` type during this feature. Any code that writes `globalCookie` after this feature no longer includes `cookieConsent`, so the legacy value naturally expires from cookies as users get re-served.
 
 ---
 
@@ -227,7 +178,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 
 `window.__og_consent_loaded = true` is a sentinel the GA4 v1 init logic checks before calling `gtag('config', ...)`. If for any reason the snippet didn't run, GA4 falls back to safe defaults rather than initializing with no consent state.
 
-`readConsentForSsr` is in `src/lib/consent/ssr.ts`. It reads `og_consent` first, falls back to the legacy `globalCookie.cookieConsent` migration shim, and returns a fully-populated `ConsentData` (defaults to all-denied if neither cookie exists). The function never throws.
+`readConsentForSsr` is in `src/lib/consent/ssr.ts`. It reads `og_consent` and returns a fully-populated `ConsentData` (defaults to all-denied when the cookie is absent). There is no legacy-cookie fallback — the migration shim was never built. The function never throws.
 
 The values are interpolated as string literals. They are typed `'granted' | 'denied'` so SQL-injection-style concerns don't apply, but the parser still validates the values match the literal union before interpolation, as defense in depth.
 
@@ -238,8 +189,9 @@ When the user makes a decision in the banner or the settings toggle, the new cod
 ```ts
 window.gtag?.('consent', 'update', {
   analytics_storage: newConsent.analytics_storage,
-  preference: newConsent.preference,
-  // ad_* unchanged
+  ad_storage: 'denied',
+  ad_user_data: 'denied',
+  ad_personalization: 'denied',
 });
 ```
 
@@ -398,11 +350,11 @@ EN copy is final per Mastermind. RS / RU / CNR copy lands as placeholders pendin
 
 ## Implementation order — Phase 5 brief sequence
 
-1. **Foundation**: new `ConsentData` type, `og_consent` cookie helpers (`read`, `write`, `migrate`), Zustand store for consent state, SSR `readConsentForSsr` helper.
+1. **Foundation**: new `ConsentData` type, `og_consent` cookie helpers (`read`, `write`), Zustand store for consent state, SSR `readConsentForSsr` helper.
 2. **SSR snippet**: `app/layout.tsx` server-side read + inline `<script>` emission. No banner changes yet.
-3. **Banner rebuild**: new Drawer UX (twin CTAs + Customize), wired to `og_consent`. Old `cookieConsent` reads still happen in parallel for migration. New banner replaces the old one in `(portal)/layout.tsx` and `(owner)/layout.tsx`.
+3. **Banner rebuild**: new Drawer UX (twin CTAs + Customize), wired to `og_consent`. New banner replaces the old one in `(portal)/layout.tsx` and `(owner)/layout.tsx`.
 4. **Footer link + reopen flow**: `companyNavigations.tsx` entry + Zustand flag + banner subscribe.
-5. **Settings page integration**: `/owner/user` toggle rewires to `og_consent`; analytics toggle added.
+5. **Settings page integration**: `/owner/cookies` toggle rewires to `og_consent`; analytics toggle added.
 6. **Card-size + language gating**: usePortalCardSize / useDashboardCardSize / language cookie writes check `og_consent.preference`.
 7. **Cleanup**: delete dead `firebaseAnalytics.ts`, delete `PREFERENCE_COOKIE_NAME` alias, remove old `cookieConsent` field from `GlobalCookie` type.
 8. **Translations + locale seed**: SQL file with all four locales.
@@ -424,10 +376,10 @@ Brief 1 lands the type and helpers without changing user-visible behavior. Each 
 
 ## Test plan
 
-- **Unit (web).** `og_consent` read/write/migrate helpers. `readConsentForSsr` paths: no cookie, legacy cookie only, new cookie only, both cookies (new wins). `gtag('consent', 'update', ...)` is called with the correct arguments on each banner CTA.
+- **Unit (web).** `og_consent` read/write helpers. `readConsentForSsr` paths: cookie present, cookie absent (all-denied default). `gtag('consent', 'update', ...)` is called with the correct arguments on each banner CTA.
 - **Component (web).** Banner default-state and customize-state render correctly. Twin CTAs each write the right values. Footer link reopens the banner with current state pre-populated. Settings page toggles bidirectionally synced with `og_consent`.
 - **Integration (web).** SSR snippet emits the correct `gtag('consent', 'default', ...)` call for each cookie state. Cookie gating: card-size write no-ops when `preference === 'denied'`.
-- **Manual.** Open in private window, see banner, click each CTA path, verify cookie state. Repeat with the legacy `globalCookie.cookieConsent` set to simulate a migrated user. Verify the footer link works in all three locales. Verify the settings toggle sync is bidirectional.
+- **Manual.** Open in private window, see banner, click each CTA path, verify cookie state. Verify the footer link works in all three locales. Verify the settings toggle sync is bidirectional.
 
 ---
 
@@ -444,7 +396,6 @@ Brief 1 lands the type and helpers without changing user-visible behavior. Each 
 - Docs/QA notifies the legal-drafts chat that consent UX has changed.
 - `state.md` updated: status `shipped`, GA4 v1 unblocked.
 - `decisions.md` carries the closing entry summarizing the feature.
-- Legacy `globalCookie.cookieConsent` migration fallback is scheduled for deletion in 60 days as a tracked chore.
 
 ---
 

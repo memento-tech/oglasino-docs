@@ -18,4 +18,4 @@
 | [`expo/`](expo/) | Expo project + EAS build profiles for the React Native app. |
 | [`github/`](github/) | Repo inventory, GH Actions secrets, deploy workflows. |
 | [`namecheap/`](namecheap/) | Domain registration and renewal records. |
-| [`runbooks/`](runbooks/) | Operational procedures — deploy, rotate secrets, recover from droplet loss, debug stage vs prod. |
+| [`runbooks/`](runbooks/) | Operational procedures — deploy, rotate secrets, recover from droplet loss, debug stage vs prod, database-overload incident handling. |

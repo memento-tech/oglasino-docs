@@ -4,7 +4,7 @@ Adds a `'system'` (follow-OS) theme option to `oglasino-expo`, bringing mobile t
 
 ## Status
 
-`shipped (code)` / `verifying`. Branch: `new-expo-dev` (Igor's isolation branch, see decisions.md 2026-05-25). On-device verification (Ψ) owed; rides the pending iOS+Android rebuild dependency (see state.md Risk Watch). Do not promote to `mobile-stable` until Ψ passes.
+`shipped (code)` / `verifying`. Branch: `new-expo-dev` (Igor's isolation branch, see decisions.md 2026-05-25). On-device verification (Ψ) owed; the iOS+Android rebuild has landed (2026-06-01), so this Ψ is no longer blocked on a build — it is unblocked, awaiting Igor running it on device (see state.md Risk Watch). Do not promote to `mobile-stable` until Ψ passes.
 
 ## The machine (mirrors web)
 

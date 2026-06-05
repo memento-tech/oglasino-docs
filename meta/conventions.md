@@ -83,7 +83,7 @@ Local working tree:
 
 ~/code/oglasino/
 oglasino-backend/ Spring Boot, Hibernate, Postgres, Firebase Admin
-oglasino-web/ Next.js 15 App Router, React TS, Tailwind, Zustand
+oglasino-web/ Next.js 16 App Router, React TS, Tailwind, Zustand
 oglasino-expo/ Expo, React Native
 oglasino-router/ Cloudflare Worker, TypeScript, Wrangler 4
 oglasino-firestore-rules/ Firestore Security Rules, TypeScript tests with @firebase/rules-unit-testing
@@ -174,6 +174,7 @@ Non-negotiable. The session summary's "Cleanup performed" section lists what was
   - Router: `npm run lint` (which is `tsc --noEmit`) and `npm test`
   - Firestore Rules: `npm test` (vitest against the emulator project; the npm script handles emulator wiring)
 - If a refactor obsoletes old code, the old code is deleted in the same session. Not left "for later."
+- **Docs stay in sync with the change.** When a change makes a `README` or any other doc stale — file/folder layout, commands, scripts, env vars, endpoints, status, cross-links — update that doc in the same session. The doc that describes a change is part of the change; the task is not done until it matches reality. Each agent owns the docs in its own repo (each engineer agent its repo's `README` and `<repo>/docs/`; Docs/QA owns `oglasino-docs`). If a change in one repo invalidates a doc in another, flag it per Part 4b rather than reaching across repos.
 - Engineer agents explicitly answer the question "what does this session obsolete?" in the "Obsoleted by this session" section of the summary. "Nothing" is valid but must be written.
 
 ## Obsoleted by this session
@@ -469,7 +470,7 @@ If validation logic produces a 500, that's a bug.
 | Layer   | Tech                                                                                                                                                                       |
 | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Backend | Spring Boot 4 / Spring 7, Java 21, Maven, JPA/Hibernate, PostgreSQL, Elasticsearch, Redis, Cloudflare R2                                                                   |
-| Web     | Next.js 15 App Router, React 18 TypeScript, Zustand, Tailwind, next-intl, axios, Zod                                                                                       |
+| Web     | Next.js 16 App Router, React 19 TypeScript, Zustand, Tailwind, next-intl, axios, Zod                                                                                       |
 | Mobile  | Expo, React Native, TypeScript                                                                                                                                             |
 | Edge    | Cloudflare Worker (`oglasino-router`), TypeScript, Wrangler 4, Vitest                                                                                                      |
 | Rules   | Firestore Security Rules language, TypeScript tests with `@firebase/rules-unit-testing` v4, Vitest 2, Firebase Tools 13, Node 20+                                          |

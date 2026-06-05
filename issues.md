@@ -4,6 +4,418 @@ Append-only log of out-of-scope findings. Newest at the top. Each entry has a da
 
 ---
 
+## 2026-06-04 — Password (email/password) users are wrongly told to change their email "with their provider"; in-app email change is blocked for them
+
+**Repo:** `oglasino-backend` · **Severity:** medium · **Status:** fixed
+**Found in:** `DefaultUserFacade.java:170` (the gate); `DefaultFirebaseAuthService` `extractSignInProvider` (the provider value source).
+**Detail:** The gate at `DefaultUserFacade.java:170` allows an in-app email change only when the stored `registeredWithProvider` is **blank** (`StringUtils.isBlank`). Apparent intent: email/password users (no external provider) may change their email; federated users (Google etc.) may not, since the provider owns the address. Reality: email/password users do **not** get a blank provider — they get `"password"` (via `extractSignInProvider`, as of the 2026-06-04 provider-string fix; before that, the mangled claim-map `toString()` — also non-blank). So the `isBlank` branch is never true for them, and the gate blocks email changes for **all** users whose token carried a firebase claim (i.e. everyone). User-facing symptom: a password user attempting to change their email is shown a message to the effect of "change your email with your provider" — wrong/confusing, because for a password user there is no external provider; the app itself is the provider. Pre-existing; **not** caused by the 2026-06-04 provider-string fix (which preserved this behavior exactly). Flagged as a Part 4b adjacent observation in that session's backend summary. Related to the persisted-field entry [2026-06-03 — `registeredWithProvider` stored as the firebase-claim Map's `toString()`](#2026-06-03--registeredwithprovider-stored-as-the-firebase-claim-maps-tostring).
+
+**Open questions to resolve before fixing (Igor to decide):**
+- Should email/password users be able to change their email in-app at all?
+- If yes: where does the change happen — through the backend (then the gate must compare against the literal `"password"` provider rather than blank), or directly via the Firebase client SDK (then the backend gate is moot and the client flow + the misleading message are what need work)? Depends on Firebase project settings (e.g. verify-before-update) and which client owns the flow — not yet audited.
+- For federated (Google etc.) users, email genuinely is provider-owned; any message for them should say that accurately, distinct from the password-user case.
+
+> **Fixed 2026-06-05 (Igor).** Two-part resolution. (1) Product decision: password
+> (email/password) users do NOT change their email in-app — the gate blocking them is
+> CORRECT behavior, not a defect, so the entry's framing of the block as a bug is retracted.
+> (2) Code fix: the misleading "change your email with your provider" message has been
+> REMOVED for password users, closing the real user-facing flaw. The three open product
+> questions are answered: password users can't change email in-app (by design); no in-app
+> email-change flow exists for them; federated (google.com) users remain provider-owned as
+> before.
+
+---
+
+## 2026-06-04 — Web: `/notifications` page `markNotificationsAsSeen` exhaustive-deps warning
+
+**Repo:** `oglasino-web` · **Severity:** low · **Status:** fixed
+**Detail:** Found and resolved in the same prod-bug-sweep session (`notifications/page.tsx:23`). The only missing dep is the unstable `markNotificationsAsSeen` (recreated every render); adding it would cause redundant Firestore reads + an `onSnapshot` re-fire loop. Kept the `[user]` deps and added `eslint-disable-next-line react-hooks/exhaustive-deps` + a rationale, matching in-repo precedent.
+
+> **Fixed 2026-06-04 (prod-bug-sweep, `dev`).** Suppress-with-rationale; lint 143 → 142. See `sessions/2026-06-04-oglasino-web-prod-bug-sweep-2.md`.
+
+---
+
+## 2026-06-04 — ES-performance + external-client-timeout thread: carry-forward items (all resolved)
+
+**Repo:** `oglasino-backend` · **Severity:** mixed (per-item below) · **Status:** fixed (all four items resolved — config-getters, guava, and getTranslatedValue fixed 2026-06-04 bug-batch-fix; OpenAI-throttle bullet wontfix per Igor 2026-06-04)
+**Detail:** Part 4b adjacent observations surfaced across the 2026-06-04 ES-performance / timeout-hardening / perf-bulk sessions and deliberately left out of scope. Each is independent.
+
+- **(medium) Config default-`0` getters — unmigrated footgun callers.** `DefaultConfigurationService.getIntConfig`/`getLongConfig`/`getDoubleConfig` return `0` on a missing/blank/unparseable key. The perf-bulk session added safe `get*Config(key, default)` overloads but migrated only the OpenAI timeout consumer. Still reading via the `0`-returning getters: `DefaultRedisViewCounterService` (`redis.product.view.delta.ttl`), `DefaultProductSeenService` (`redis.product.view.owner.ttl`, `redis.product.view.dedup.window.ms`), and `ProductRemovalJob` (`product.removal.batch.size` → loud crash on 0; `product.removal.days.old` → **risks premature deletion / latent data loss**). Each is now a one-liner via the new overload but needs a business-chosen non-zero default (unspecified in the repo). **Follow-up brief candidate.** Surfaced by `perf-bulk-1`.
+  > **Fixed 2026-06-04 (bug-batch-fix, `dev`).** All six remaining single-arg default-0 call sites (`DefaultRedisViewCounterService` ×2, `DefaultProductSeenService` ×2, `ProductRemovalJob` ×2) migrated to the 2-arg safe overload with the seeded value as default (86400000L / 43200000L / 100 / 30); a missing/blank row now falls back to seeded intent, not 0. Single-arg getters unchanged (other callers). 943 tests green.
+- **(low) OpenAI failure Telegram alert has no throttle.** A sustained OpenAI outage fires one Telegram alert per failed request. Deliberate — no existing dedup/cooldown to reuse, and the brief said not to invent one. Throttling is a follow-up. Surfaced by `timeout-hardening-1`.
+  > **Wontfix (Igor, 2026-06-04).** The un-throttled alerting is intended: sustained hammering during an OpenAI outage is the desired signal so it gets attention immediately. Not a defect.
+- **(low) Guava is a transitive dependency only.** `Striped` (added this thread) and the existing `Lists` usage rely on `com.google.guava:guava` arriving transitively via `firebase-admin`; it is not declared directly in `pom.xml`. Would break silently if firebase-admin ever dropped it. Consider declaring it directly. Surfaced by `perf-bulk-1`.
+  > **Fixed 2026-06-04 (bug-batch-fix, `dev`).** `com.google.guava:guava` declared directly in `pom.xml`, pinned to `33.5.0-jre` (the exact version firebase-admin already resolves — `dependency:tree` confirms same version, now top-level). `Striped` + `Lists` usages compile; 940 tests green.
+- **(low, cosmetic) `ProductDocument.getTranslatedValue` is a pseudo-static instance method.** It does list filtering and is really a static utility, yet lives as a public instance method on the document; called by three converters. Predates this thread. `elasticsearch/documents/ProductDocument.java:271`. Surfaced by `es-description-text-mapping-1`.
+  > **Fixed 2026-06-04 (bug-batch-fix, `dev`).** Made `public static`; all 4 call sites across the 3 converters (`SearchProductDataConverter`, `ProductOverviewConverter`, `ProductDetailsConverter` ×2) updated to `ProductDocument.getTranslatedValue(...)`. No instance state was read. 940 tests green.
+
+---
+
+## 2026-06-04 — Router: prod `assetlinks.json` carries a placeholder SHA-256 (Android App Links unverified until Play Console setup)
+
+**Repo:** `oglasino-router` · **Severity:** medium · **Status:** open
+
+`src/index.ts` `ASSETLINKS_PROD` ships `sha256_cert_fingerprints: ["REPLACE_AFTER_PLAY_CONSOLE_SETUP"]` because the app is not yet in the Play Store. Android App Links verification on `oglasino.com` will fail until the real production signing-cert SHA-256 replaces the placeholder. With Play App Signing, the correct value is Google's app-signing key SHA-256 from Play Console → Setup → App signing (list both upload + Play-signing keys; the field is an array). iOS AASA is final. **Fix:** swap once Play Console app signing is set up (one-line router edit + redeploy). See [features/deep-linking.md](features/deep-linking.md) §5.
+
+---
+
+## 2026-06-04 — Router: stage `assetlinks.json` carries a placeholder preview SHA-256
+
+**Repo:** `oglasino-router` · **Severity:** medium · **Status:** open
+
+`src/index.ts` `ASSETLINKS_STAGE` ships `sha256_cert_fingerprints: ["REPLACE_AFTER_PREVIEW_KEYSTORE_SETUP"]`. The real preview fingerprint (`eas credentials` → Android → preview keystore → SHA-256; no Play Console dependency) was not available at implementation time. Android App Links verification on `stage.oglasino.com` for `com.oglasino.preview` will fail until swapped in. **Fix:** generate the preview keystore, pull its SHA-256, swap (pairs with the prod-SHA entry above). See [features/deep-linking.md](features/deep-linking.md) §5.
+
+---
+
+## 2026-06-04 — In-app base-site switch leaves the product feed stale (latent, pre-existing)
+
+**Repo:** `oglasino-expo` · **Severity:** medium · **Status:** fixed (pending on-device Ψ)
+
+Surfaced by the deep-link base-site-switch audit. The in-app `PortalConfigDialog` base-site switch (`pickBaseSite` while the portal is mounted) does **not** refresh the home/catalog product feed unless the switch also changes the language: the feed's only post-mount refetch triggers are `fetchPage` identity and `selectedLanguage.code` (`ProductList.tsx:154,162`) — **never `selectedBaseSite`**. So switching between two base-sites that share the user's active language likely leaves the feed showing the **old** site's products until a manual refresh or navigation. The `X-Base-Site` header is correct on the next request (interceptor reads the store live) — the gap is nothing *triggers* that next request. Not introduced by the deep-link feature (the deep-link path switches before the portal mounts, so it's unaffected). **Fix candidate:** add a `selectedBaseSite.code` dependency to the feed's refresh effect, mirroring the existing language trigger. **Verify on-device first.**
+
+> **Fixed 2026-06-04 (prod-bug-sweep, `new-expo-dev`) — pending on-device Ψ.** Added one dedicated `useEffect` in `ProductList.tsx` keyed on `selectedBaseSite?.code` (the string, not the object) with an initial-capture ref guard, calling `onRefreshCurrent()`. The home feed was the real gap; catalog mostly self-heals. 515 tests pass. **Requires device Ψ before final close:** (i) switching between two base-sites sharing the active language refreshes the home feed with no manual pull, (ii) no double-fetch / flicker, (iii) the language-also-changes case still works. See `sessions/2026-06-04-oglasino-expo-prod-bug-sweep-1.md`.
+
+---
+
+## 2026-06-04 — Web: app-store/play-store footer badges are dead, and no "open in app" surface exists yet
+
+**Repo:** `oglasino-web` · **Severity:** low · **Status:** open (deferred — blocked on store listings)
+
+Web's footer app-store/play-store badges (`Footer.tsx:80-86`) are icons only — no `<a>`/`href`/`onClick`. They're the natural consumer surface for store-listing links and a future "open in app" affordance, but both are blocked on the app being published (store-listing URLs don't exist yet). The dormant `appDeepLink.ts` scaffold (`APP_DEEP_LINK_ENABLED=false`, custom-scheme based) is the intended single home to extend for an https "open in app" link. **Deferred** until the app is in the stores; no v1 web work. See [features/deep-linking.md](features/deep-linking.md) §5.
+
+> **Note (2026-06-04):** overlaps with the 2026-05-31 issue "Mobile-app store badges on web are dead/icon-only" — that entry tracks wiring the badges to the **store-listing** URLs; this entry adds the **"open in app" https affordance** as the second, app-publish-gated surface on the same badges. Resolve together when the app is in the stores.
+
+---
+
+## 2026-06-03 — Mobile: `getNormalizedProductUrl` hardcodes the production host on all build tiers
+
+**Repo:** `oglasino-expo` · **Severity:** medium · **Status:** fixed
+
+`getNormalizedProductUrl` (`src/lib/utils/utils.ts:136`) hardcodes `https://oglasino.com` regardless of build tier, so **preview/dev builds emit product *share* links pointing at production** — a tester sharing a product from a non-prod build sends recipients to the prod site (wrong-environment links; not a crash). Surfaced while adding the tier-aware `getForgotPasswordUrl` (same file), which selects the host from `extra.env` (`production → oglasino.com`, else `stage.oglasino.com`). **Fix direction:** make the share-URL host tier-aware the same way — the two URL builders could be unified onto a single tier→host helper. Left unfixed deliberately: changing share-link host is a behavior change wanting its own decision, and it's outside the password-reset scope. Low effort, own touch.
+
+> **Fixed 2026-06-04 (prod-bug-sweep, `new-expo-dev`).** Extracted a single `getWebBase(env)` host helper in `utils.ts` (`production` → `oglasino.com`, else `stage.oglasino.com`); the prefixed `getNormalizedProductUrl` and `getForgotPasswordUrl` both resolve host through it, and `env` was threaded into the two outbound share-URL callers (`ShareProductButton.tsx`, `UploadedProductDialog.tsx`). Preview/dev builds now emit stage share links, not prod. `utils.test.ts` updated; 515 tests pass. URL-string logic, unit-tested — no device Ψ strictly required. See `sessions/2026-06-04-oglasino-expo-prod-bug-sweep-1.md`.
+
+---
+
+## 2026-06-03 — Web: `Input` interpolated Tailwind width class is invisible to JIT
+
+**Repo:** `oglasino-web` · **Severity:** low · **Status:** fixed
+
+`src/components/server/Input.tsx:63-65` builds a width class by interpolation — `` max-w-[${maxWidth}px] `` — which Tailwind's JIT compiler cannot see at build time, so any non-default `maxWidth` silently produces **no** width class (the prop appears to work but does nothing). Surfaced during the password-reset web build (which passes no `maxWidth`, so unaffected). **Fix direction:** use a static class map or an inline `style={{ maxWidth }}` rather than an interpolated arbitrary value. Low severity (no current caller relies on it) but a real footgun for a future caller who sets `maxWidth` and sees it ignored. Left unfixed: out of scope.
+
+> **Fixed 2026-06-04 (prod-bug-sweep, `dev`).** Both `Input.tsx` and `Textarea.tsx` switched from the `max-w-[${maxWidth}px]` interpolation to inline `style={maxWidth > 0 ? { maxWidth } : undefined}`. The live caller (`owner/products/[productId]/page.tsx:489`, `maxWidth={100}`) now gets its cap — audit corrected the "purely latent" premise: Item had one live caller. The `Textarea.tsx` twin was not in the original report; found in audit and fixed in the same session. tsc/test green. See `sessions/2026-06-04-oglasino-web-prod-bug-sweep-2.md`.
+
+---
+
+## 2026-06-03 — `DefaultConfigurationService` cache warms after @Scheduled tasks start (startup race)
+
+**Repo:** `oglasino-backend` · **Severity:** medium · **Status:** fixed
+**Found in:** `service/impl/DefaultConfigurationService.java` (cache populated on `ApplicationReadyEvent`);
+surfaces in any early `@Scheduled` config consumer.
+**Surfaced by:** DB Overload Protection stage verification (2026-06-03), via `DatabaseHealthMonitor`.
+
+**Detail.** `DefaultConfigurationService` populates its `configurationCache` on `ApplicationReadyEvent`.
+Spring starts `@Scheduled` tasks earlier, at `ContextRefreshedEvent` (which fires before
+`ApplicationReadyEvent`). So there is a window at every boot where a scheduled task that reads
+configuration sees an unwarmed cache: `getConfig(...)` returns empty, and the required-accessors
+(`getRequiredConfig` / `getRequiredDoubleConfig`, etc.) throw
+`IllegalStateException: Required configuration key is missing or blank` rather than returning a value.
+The condition self-corrects once `ApplicationReadyEvent` warms the cache (≈1s into boot), so steady-state
+operation is unaffected — but the first poll(s) of any early scheduled consumer fail at every cold start.
+
+**How it surfaced.** `DatabaseHealthMonitor` polls every 2s with no initial delay and uses the throwing
+required-accessors, so its first cold-boot poll threw the `IllegalStateException` (for
+`threshold.yellow.ratio`) and the monitor sat at GREEN until the cache warmed. The seed data was present
+and correct — purely a load-ordering race, not missing config.
+
+**Blast radius (other early consumers in the same window).** Any `@Scheduled` task reading config during
+the startup window is exposed, e.g. `DefaultScheduledRedisFlushService` and the image-removal jobs. These
+have not visibly broken (they do not use the throwing accessors, tolerate the empty return, or do not run
+that early), but the latent race applies to them too. The monitor is simply the consumer that surfaced it.
+
+**Already mitigated for the monitor.** The DB-overload `DatabaseHealthMonitor` was made immune during stage
+verification (early-return / unwarmed-cache skip on the poll, confirmed by a clean cold boot). This issue
+covers the REMAINING, central fix for all other early consumers — the monitor's local guard does not fix them.
+
+**Proposed fix (deliberate, not a feature rider).** Warm the cache eagerly and ordered before scheduled
+tasks — e.g. `@PostConstruct` + `@DependsOnDatabaseInitialization` on the cache-init method, so it runs
+after `spring.sql.init` seeding but before `@Scheduled` tasks start. This is a change to a CORE service that
+the whole app depends on, so it must be done on a clean tree with its own test pass (assert the cache is
+populated before scheduled tasks run) and a quick check that the other early consumers
+(`DefaultScheduledRedisFlushService`, image-removal jobs) are not surprised by the new ordering. Not bundled
+into feature work; not urgent (benign, self-correcting, predates the DB-overload feature).
+
+> **Fixed 2026-06-04 (bug-batch-fix, `dev`).** Warm moved to `@PostConstruct` + `@DependsOnDatabaseInitialization`, running after Flyway + `spring.sql.init` seed but before the scheduler. `isReady()` + `DatabaseHealthMonitor` skip kept as non-load-bearing backup. Seed-ordering verified. Unit test added; `@SpringBootTest` ordering assertion still owed (no harness in project). 943 green.
+
+---
+
+## 2026-06-03 — Web: JSON-LD `<script>` injection — backend strings via `JSON.stringify` not escaped for script context
+
+**Repo:** `oglasino-web` · **Severity:** high · **Status:** fixed
+**Found in:** `src/components/server/seo/JsonLd.tsx:14` (`dangerouslySetInnerHTML={{ __html: JSON.stringify(item) }}`); fed by `generateProductPageStructuredData.ts:61-62,116`, `generateUserPageStructuredData.ts:19,46`, `generateCatalogPageStructuredData.ts:44`.
+**Detail:** Raw `product.name` / `product.description` / `user.displayName` / `product.title` are injected into a `<script type="application/ld+json">` via `JSON.stringify`, which does not escape `</script>`/`<`/`>`. A value containing `</script><script>…</script>` breaks out and executes — stored XSS on public, unauthenticated pages. Currently masked by the backend's input HTML-encoding (`InputSanitizationFilter`); will be exposed when the `backend-security-hardening` feature removes that filter (M1). Fix web-side: escape serialized JSON for the script context (`.replace(/</g,'\\u003c')`) or change the delivery off a raw `<script>`. Closing this is Brief 3 of `backend-security-hardening`, and it **gates** the backend filter removal (Brief 4). Surfaced by the backend-security-hardening web output-encoding audit (`sessions/audit-web-output-encoding.md`).
+
+> **Fixed 2026-06-04 (backend-security-hardening Brief 3).** `oglasino-web` `src/components/server/seo/JsonLd.tsx` escapes serialized JSON-LD for the HTML script context as its single output path (`serializeJsonLd`: `<`/`>`/`&` → `\uXXXX`); a `</script>` payload in any backend/user field can no longer break out. Output remains valid, parseable JSON-LD. Verified by `JsonLd.test.ts`.
+
+---
+
+## 2026-06-03 — Account-method collision: social user's email+password register/login UX is unhandled
+
+**Repo:** `oglasino-web` + `oglasino-expo` + `oglasino-backend` (Firebase config) · **Severity:** medium · **Status:** open
+
+Surfaced during password-reset Phase 1 intake. A user who created their account via a social provider (Google) has a Firebase user with provider `google.com`. The Firebase project is set to **"Link accounts that use the same email"** (one user per email; providers linkable). Two unhandled UX consequences: (1) `signInWithEmailAndPassword` on that email fails with the generic `auth/invalid-credential` (email-enumeration protection on) — the user is told "Invalid email or password" with no path forward; (2) under account-linking, getting a password onto that account requires a credential-linking (re-auth) flow rather than a clean "add a password" UX — neither client surfaces a usable linking flow today, and `mapAuthError` shows generic copy. **Not worked out:** the product behavior — (a) detect and guide ("this email uses Google — sign in with Google", squared against the no-leak posture used elsewhere), (b) build an explicit account-linking UX (let the user add a password to a social account via re-auth), or (c) friendlier copy on the raw errors. **Needs** its own Mastermind feature chat. **NOT a password-reset blocker** — reset is correct regardless (social-only accounts get the provider-gated "use social" email, never a reset link). Logged so it isn't lost.
+
+---
+
+## 2026-06-03 — `registeredWithProvider` stored as the firebase-claim Map's `toString()`
+
+**Repo:** `oglasino-backend` · **Severity:** medium · **Status:** fixed
+**Found in:** `service/impl/DefaultFirebaseAuthService.java` `getOrCreateUser` (~:96-97; provider-derive path also flagged ~:78-79).
+**Detail:** `getOrCreateUser` stores `User.registeredWithProvider` as the `firebase` claim **Map's `toString()`** (e.g. `{sign_in_provider=password, identities=…}`) rather than the provider string. That stored value feeds `AuthUserDTO.providerId`, which web/mobile may read. The email-notifications feature's verification gate and registration listener read the **nested `firebase.sign_in_provider` claim** off the live token correctly and are unaffected, but the persisted field is likely garbage. Confirmed by multiple email-notifications backend sessions (`-4` Part 4b, `-5` Brief-vs-reality §3); deliberately not fixed there (out of scope — the feature reads the claim, not the column). Fix: store the actual provider string (`sign_in_provider`), not the map's `toString()`. Route to a backend chat.
+
+> **Fixed 2026-06-04 (bug-batch-fix, `dev`).** `getOrCreateUser` now derives `providerId` via `extractSignInProvider` (`firebase.sign_in_provider`) instead of the claim map's `toString()`; both write sites and both wire emitters (`AuthUserDTO`/`UpdateUserDTO`.`providerId`) carry the clean value. No migration (no existing users). Email-edit gate behavior unchanged. 943 tests green.
+
+---
+
+## 2026-06-03 — `emailVerifiedExternal` is stale-by-design — must not be read as authoritative
+
+**Repo:** `oglasino-backend` · **Severity:** low/medium · **Status:** open
+**Found in:** `service/impl/DefaultFirebaseAuthService.java` (~:143, set once at registration); column `users.email_verified_external`.
+**Detail:** `emailVerifiedExternal` is captured **once** at registration from the token and **never reconciled** — it goes stale the moment a user verifies after first login. It must **not** be used as an authoritative verification source anywhere: the **live Firebase token** is authoritative (the `FirebaseAuthFilter` gate reads it). The email-notifications resend path's former reliance on this column was **removed** (`-10`, Igor-confirmed: the unauthenticated resend must not trust it — no live token there to read true state, and the rate-limits + no-leak property bound the harmless re-send). Logged as a trap so nothing reads it as truth later. Flagged across email-notifications backend sessions (`-1` audit, `-4`, `-6`, `-10`). Today its only live reader is display (`UserInfoDTO.verified`).
+
+> **2026-06-04:** projection path reconciled to OR in `emailVerifiedExternal`, matching the converter — both display paths now agree. Column remains stale-by-design; live Firebase token stays source of truth.
+
+---
+
+## 2026-06-03 — `DefaultCloudflareKvService` uses a no-timeout `RestTemplate`
+
+**Repo:** `oglasino-backend` · **Severity:** medium · **Status:** fixed
+**Found in:** `service/impl/DefaultCloudflareKvService.java:23` (`private RestTemplate
+restTemplate = new RestTemplate();`).
+**Detail:** The Cloudflare KV client uses a `RestTemplate` with no connect/read timeout,
+unlike the 3s-timeout `RestTemplate` in `ApplicationConfig`. A hung Cloudflare KV call blocks
+the calling thread indefinitely. Surfaced by the DB-overload-protection Phase-2 audit. The
+auto-trip path in that feature explicitly avoids this by using a timeout-bounded client for
+its own KV write, but the EXISTING `toggleMaintenance()` (the admin maintenance wrench) still
+uses the no-timeout client. Fix: give `DefaultCloudflareKvService` a timeout-bounded
+`RestTemplate` (mirror `ApplicationConfig.restTemplate()`). Out of scope for the audit;
+logged for a backend chat.
+
+> **Fixed 2026-06-04 (external-client timeout hardening).** Legacy field-init `new RestTemplate()` deleted; `DefaultCloudflareKvService` now uses the single bounded `ApplicationConfig.restTemplate()` bean (3s/3s) for both the admin toggle and the auto-trip assert path. The two read helpers stay distinct (degrade-to-off vs propagate-on-failure); only the client is shared. Full suite 935 green.
+
+---
+
+## 2026-06-03 — `FirebaseAuthFilter` and `InternalTokenFilter` are double-registered
+
+**Repo:** `oglasino-backend` · **Severity:** medium · **Status:** fixed
+**Found in:** `ApplicationConfig:22` (`FirebaseAuthFilter` `@Bean`), `ApplicationConfig:33`
+(`InternalTokenFilter` `@Bean`); both added to the Security chain in `SecurityConfig:83-84`.
+**Detail:** Both are `@Bean` `OncePerRequestFilter`s with no `FilterRegistrationBean`
+disabling servlet auto-registration, so Spring Boot also auto-registers them as standalone
+servlet filters at `LOWEST_PRECEDENCE`, in addition to their place in the Security chain.
+`OncePerRequestFilter`'s dedupe guard means each body runs once per request, but the wiring is
+duplicated. `RateLimitConfig:61-67` shows the correct disable pattern
+(`reg.setEnabled(false)`). Surfaced by the DB-overload-protection Phase-2 audit. Pre-existing;
+out of scope. Fix: add `FilterRegistrationBean`s disabling servlet auto-registration for both,
+matching `RateLimitConfig`.
+
+> **Fixed 2026-06-04 (backend-security-hardening Brief 6 / M2).** Servlet auto-registration disabled via `FilterRegistrationBean.setEnabled(false)` for both filters in `ApplicationConfig`, mirroring `RateLimitConfig`. (Note: both extend `OncePerRequestFilter`, so the body already ran once — this was redundant wiring, not a perf doubling, correcting the original security audit's claim.) Full suite 915 green.
+
+---
+
+## 2026-06-02 — RESOLVED — New-message push did not fire (emitter never built)
+
+**Repo:** `oglasino-expo` + `oglasino-web` (client emitter) · **Severity:** medium · **Status:** fixed
+**Detail:** (2026-06-02) RESOLVED — new-message push did not fire on either client. Root cause: the
+message-ping was built **receiver-first** (backend B4 endpoint `/notifications/message-sent`) but
+the client **emitter** that calls it on message-send was never built — caught during on-device
+verification, when no network call left the device on send. Fixed: expo E3 + web W4 added the
+post-commit fire-and-forget ping to `/notifications/message-sent` (`{chatId, messageText}` only,
+Part 11 — recipient/participant-check server-side). Confirmed working on device + web 2026-06-02.
+Process note: the `mobile-stable` hold did its job — device verification surfaced the gap before the
+feature was marked stable. See [decisions.md](decisions.md) 2026-06-02.
+
+---
+
+## 2026-06-02 — RESOLVED — Image-only messages produced no push
+
+**Repo:** `oglasino-backend` (B6) + `oglasino-expo` (E5) + `oglasino-web` (W4) · **Severity:** medium · **Status:** fixed
+**Detail:** (2026-06-02) RESOLVED — image-only (no-text) messages produced no push (the emitter
+skipped them; the client must not fabricate a body). Fixed across the stack: backend B6 relaxed the
+message-ping DTO to accept empty `messageText` and supplies a localized "photo" body
+(`notif.message.photo.body`) in the recipient's language; expo E5 + web W4 now ping with empty
+`messageText` for image-only and let the backend frame the body. Both clients send `messageText=''`
+(empty string, key present) for image-only — a consistent wire shape. Confirmed on device
+2026-06-02. See [decisions.md](decisions.md) 2026-06-02.
+
+---
+
+## 2026-06-02 — RESOLVED — iOS launch crash from ungated ATT call (pre-existing, non-notifications)
+
+**Repo:** `oglasino-expo` · **Severity:** high (crash) · **Status:** fixed
+**Detail:** (2026-06-02) RESOLVED — the iOS dev build crashed instantly on launch (SIGABRT, TCC)
+because `AnalyticsInit.tsx` called `requestTrackingPermissionsAsync()` (App Tracking Transparency)
+at launch without `NSUserTrackingUsageDescription` in `Info.plist`. Android unaffected (no ATT).
+Oglasino uses first-party analytics only, not ad-tracking, so ATT is not needed: the ATT call was
+**removed** (not legitimized with a usage string), and the analytics init gate is now consent-only
+(`isAnalyticsConsentGranted()`), with the `attAllowed` operand removed (not defaulted false, which
+would have silently disabled analytics). Two `src/` files, no native change, 47 tests. Pre-existing
+issue surfaced by the fresh dev build; unrelated to the notifications feature (surfaced and fixed
+alongside the notifications device-testing round).
+
+---
+
+## 2026-06-02 — NEW (low) — unused dependency `expo-tracking-transparency`
+
+**Repo:** `oglasino-expo` · **Severity:** low · **Status:** wontfix
+**Detail:** `expo-tracking-transparency` is now an unused dependency in `oglasino-expo`
+`package.json` (its only use, the ATT call, was removed — see the ATT-crash fix above). Removing it
+is a dependency change (npm + pod drop) requiring a prebuild/rebuild, so it was deferred. Remove at
+the next expo prebuild. No runtime impact while unused.
+
+> **2026-06-04 (prod-bug-sweep) — stays open, recategorized "remove at next prebuild."** Audit confirmed the JS usage and the ATT call are gone (launch-crash fix), but the dep is still in `package.json:63` + lockfile + `node_modules` + the prebuilt iOS Pod (`Podfile.lock` ExpoTrackingTransparency 6.0.8). Removal = `npm uninstall` + prebuild, both forbidden in a code session. Not closeable as not-an-issue — there is a concrete pending action, and an unused ATT native module is App Store reviewer-bait. Fold into the next prebuild.
+
+> **Wontfix 2026-06-04 (Igor).** Removed at next prebuild as a build step; not separately tracked — a rebuild is owed regardless of this dep, so the drop rides it. Supersedes the "stays open" prod-bug-sweep note above.
+
+---
+
+## 2026-06-02 — NEW (low) — analytics GA4 DebugView eyeball owed
+
+**Repo:** `oglasino-expo` · **Severity:** low · **Status:** fixed
+**Detail:** After the ATT-call removal, the analytics init path is structurally confirmed
+(consent-only gate, tsc/eslint/47 tests green) but events were not personally watched landing in
+GA4 DebugView. Owed: toggle consent on, trigger an event, confirm it reports. Expected to work;
+flagged for completeness.
+
+> **Closed 2026-06-04 (prod-bug-sweep).** Verification item — considered done.
+
+---
+
+## 2026-06-02 — NEW (low, cosmetic) — web/mobile message-body trim divergence
+
+**Repo:** `oglasino-expo` + `oglasino-web` · **Severity:** low · **Status:** fixed
+**Detail:** For text messages, `oglasino-expo` trims the message text before sending the ping
+(`messageText.trim()`) while `oglasino-web` sends it raw. Both send a non-blank string for text and
+`''` for image-only, so the backend behaves identically; the only effect is a recipient could see
+leading/trailing whitespace in a web-originated push body that mobile would have trimmed. Trivial;
+no session warranted. Flagged for consistency.
+
+> **Fixed 2026-06-04 (prod-bug-sweep).** Web side: `useChatStore.ts:536` now sends `textBlock?.text?.trim() ?? ''`, preserving the image-only `''` contract; stored Firestore content unaffected (`dev`). Expo side: no change — expo already trims correctly (`useActiveChatStore.ts:452`); the divergence was web-only. Both halves now consistent. See `sessions/2026-06-04-oglasino-web-prod-bug-sweep-2.md`.
+
+---
+
+## 2026-06-02 — RESOLVED — Push-token sink ambiguity (fcmToken Firestore-vs-Postgres)
+
+**Repo:** `oglasino-web` (+ `oglasino-backend` send-side, `oglasino-expo`) · **Severity:** medium · **Status:** fixed
+**Detail:** (2026-06-02) RESOLVED — the long-standing "`fcmToken` lives in the Firestore `users`
+doc vs the Postgres `push_token` table" question. The backend send-side reads ONLY the Postgres
+`push_token` table; the Firestore `users.fcmToken` write was dead weight. `oglasino-web` (W1)
+deleted the Firestore path entirely (`fcmClient.getFcmToken`, `setUserFcmToken`, the
+`ensureUserInFirestore` token write, the owner-settings toggle's Firestore write) and consolidated
+on the backend Postgres path. Postgres `push_token` is now the sole web-side sink. The push-token
+attach body also no longer carries `userId` (web W1 + expo E2; backend B1 derives the owner from
+auth). Closed by the notifications feature — see [decisions.md](decisions.md) 2026-06-02 and
+[features/notifications.md](features/notifications.md) §8.1.
+
+---
+
+## 2026-06-02 — RESOLVED — Ban/unban notification deep-link route-shape mismatch
+
+**Repo:** `oglasino-backend` (+ web/expo navigate contract) · **Severity:** medium · **Status:** fixed
+**Detail:** (2026-06-02) RESOLVED — the ban/unban notification deep-link did not resolve (raised by
+web W2). The backend originally emitted the mobile-shaped `/dashboard/products?productId=`, which
+resolved on neither client after the owner route tree was flattened to `/owner/*` on both. Backend
+B5 standardized all notification navigate paths to `/owner/*`: ban/unban →
+`/owner/products?productId=`, reviews → `/owner/reviews` (flat), report → INFO category with no
+navigate. Verified resolving on web (W3) and expo (E2): `/owner/products` and `/owner/reviews` both
+resolve, no 404. The web↔expo↔backend navigate contract now agrees.
+
+---
+
+## 2026-06-02 — Notifications feature: carry-forward items (flagged, not fixed)
+
+**Repo:** `oglasino-web` + `oglasino-backend` · **Severity:** mixed (per-item below) · **Status:** fixed (all 5 bullets resolved — 4 fixed 2026-06-04 prod-bug-sweep; the backend `shown`-field bullet closed 2026-06-04, residual dead expo type-member cleanup deferred to an expo structural-sweep session)
+**Detail:** Low-priority items surfaced during the notifications feature (2026-06-02) and
+deliberately flagged-not-fixed. Each is independent. **Per-bullet status is marked inline below.**
+
+- **(low)** ~~Web `/notifications` in-app row click uses the plain `next/navigation` `useRouter`
+  (`notifications/page.tsx`) passed into `resolveNotificationAction`, which `stripRoutingLocale()`s
+  the path but does not re-add the locale (unlike the foreground/SW handlers, which use the
+  next-intl-wrapped router). Same destination route, different locale-resolution path; works via
+  edge resolution. Pre-existing (predates the notifications feature). Flagged by web W2/W3.~~
+  **→ Fixed 2026-06-04 (prod-bug-sweep, `dev`).** `/notifications/page.tsx` switched from the plain
+  `next/navigation` `useRouter` to the next-intl-wrapped `@/src/i18n/navigation` router, matching the
+  other handlers. (Audit correction: the SW/foreground handlers do **not** call
+  `resolveNotificationAction` — they inline their own switch; the only callers are this page and the
+  bell-driven toast.)
+- **(low/medium)** ~~Web service-worker focus-match never matches (opens a new tab each tap). In
+  `public/firebase-messaging-sw.template.js` the `notificationclick` focus-match compares an
+  absolute `client.url` to a relative url, so it never matches — every background notification tap
+  opens a new window/tab instead of focusing an already-open one. Pre-existing. UX (extra tabs).
+  Flagged by web W2 (outside the W2 locale scope).~~
+  **→ Fixed 2026-06-04 (prod-bug-sweep, `dev`).** Focus-match now compares pathnames via `new URL(...)`
+  instead of absolute-vs-relative `===`. Edited the `.template.js`; the generated
+  `firebase-messaging-sw.js` is not git-tracked — Igor's build regenerates it, and testing requires a
+  hard refresh / SW update.
+- **(low)** Backend `shown` field possibly dead across the stack. Expo E2 removed its only mobile
+  consumer (the `nonShown` filter) and writer (`markNotificationAsShown`). The field is now
+  unreferenced by mobile code and was already unrendered on web. It remains on the type as a
+  documented backend-written wire field. ACTION: confirm whether the backend writes `shown`
+  meaningfully; if not, drop it from the notification doc shape and both clients' types. Flagged by
+  expo E2.
+  > **Closed 2026-06-04.** Backend writes `seen`, never `shown` (audit confirmed:
+  > `DefaultNotificationsService` writes no `shown` key); the web type never declared `shown`. Both
+  > are no-ops. The only live action is removing the dead `shown` member from the expo notification
+  > type, deferred to a dedicated expo structural-sweep session.
+- **(low)** ~~Web `resolveNotificationAction` (`src/notifications/lib/notificationActions.ts`) has no
+  unit test. The W3 guard-hoist behavior (NAVIGATION / SAVED_PRODUCT resolve to `undefined` when
+  their data field is absent) would be cheap to lock with a small vitest spec. Filed per Mastermind
+  (will not get a dedicated session). Flagged by web W3.~~
+  **→ Fixed 2026-06-04 (prod-bug-sweep, `dev`).** Added `notificationActions.test.ts` (vitest, 10 cases
+  across the 7 scenarios: SAVED_PRODUCT / NAVIGATION / PRODUCT_EXPIRATION / PRODUCT_EXPIRED / MESSAGE /
+  unknown).
+- **(low)** ~~Web `router: any` parameter type in `notificationActions.ts:7` — could be typed to the
+  next-intl / next-navigation router union; intersects the pre-existing plain-vs-wrapped router
+  inconsistency on the notifications page (first bullet above), so not a one-liner. Filed per
+  Mastermind (will not get a dedicated session). Flagged by web W3.~~
+  **→ Fixed 2026-06-04 (prod-bug-sweep, `dev`).** Three `router: any` (`notificationActions.ts`,
+  `notificationManager.ts`, `useNotifications.ts`) typed to `WrappedRouter`, sequenced after the locale
+  fix that unified both callers onto the wrapped router.
+
+---
+
+## 2026-06-01 — Orphaned Facebook sign-in scaffolding (cosmetic-hide leftover)
+
+**Repo:** `oglasino-expo` · **Severity:** low · **Status:** wontfix
+**Detail:** The 2026-06-01 Facebook-button hide removed only the button + icon import from `LoginOptionsDialog.tsx`. Left in place, now caller-less, for a future Ω teardown: `FacebookIcon.tsx` (no consumer); `authStore.ts` `loginWithFacebook` type :62 + impl :143 + the `loginWithFacebookFirebase` import :9; `authService.ts:215` `loginWithFacebookFirebase` stub over its commented-out FB SDK block :216–240 (the commented block is a standing Part 4 violation); `authStore.test.ts:34` stale `loginWithFacebookFirebase` mock; `DeleteAccountConfirmationDialog` 'facebook.com' provider branch (structurally unreachable). Deliberate scope decision, not an oversight.
+
+> **Wontfix 2026-06-04.** Scaffolding intentionally retained for future Facebook login; not a defect.
+
+---
+
+## 2026-06-01 — Mobile: Facebook login button shown though Facebook is not an allowed sign-in option
+
+**Repo:** `oglasino-expo` · **Severity:** medium · **Status:** fixed
+**Detail:** The Expo login screen renders a Facebook sign-in button, but Facebook is not an allowed log-in option for the platform. Reported by Igor 2026-06-01. No mobile code was read here, so no `file:line` is asserted. Fix: remove the Facebook button from the login UI so only the supported sign-in providers are offered. Confirm against web's login provider set during the fix to keep parity.
+
+> **Fixed (code, cosmetic hide) 2026-06-01 (session bug-batch-3).** Facebook provider button + its `FacebookIcon` import removed from `LoginOptionsDialog.tsx`. Deliberate cosmetic-hide scope — the broader FB scaffolding (FacebookIcon.tsx, `loginWithFacebook` store action, `loginWithFacebookFirebase` stub + commented SDK body, test mock, `DeleteAccountConfirmationDialog` 'facebook.com' branch) is left in place and logged for a future Ω teardown (see the 2026-06-01 "Orphaned Facebook sign-in scaffolding" entry directly above). On-device confirmation owed (Ψ).
+
+---
+
+## 2026-06-01 — Create/update product-parity carry-forward items (out of scope, logged open)
+
+**Repo:** `oglasino-expo` + `oglasino-backend` + `oglasino-web` · **Severity:** mixed (per-item below) · **Status:** fixed (all 5 items resolved — the `FilterConverter` selected-filters bullet, the last open item, fixed 2026-06-04)
+**Detail:** Findings surfaced during the create + update product-parity feature (2026-06-01) and deliberately left out of scope. Logged so they are not lost. Each is independent.
+
+- **(low)** ~~`ProductCard` renders raw enum as state badge text — `oglasino-expo` `ProductCard.tsx:84`/`:88` prints the literal `ProductState`/`ModerationState` enum string (e.g. "INACTIVE", "BANNED") rather than a translated label. Parity item if real product cards are expected to show localized state labels.~~ **Closed as not-an-issue 2026-06-04 (prod-bug-sweep).** Audit confirmed web renders the same raw enums (`UniversalProductCard.tsx:47,52`) — this is platform **parity, not a defect**. The badge shows correct status (INACTIVE/DELETED/BANNED) on the owner-facing dashboard only; localizing would need new backend seed rows + a two-platform change + translator debt for low-value owner-facing polish. Not deferred — closed.
+- **(low)** ~~Preview Details tab reads `imageKeys` directly, not the hydrated `imagesData` — `oglasino-expo` `PreviewProductDialog.tsx` (details mode). Guarded (`?.map ?? []`) so it cannot crash, but not re-pointed to the single-`imagesData` model. Follow-up if the details preview should mirror the update screen's image model.~~ **Fixed (code) 2026-06-01 (session bug-batch-3).** Details-mode carousel re-pointed from `imageKeys` to the hydrated `imagesData` (key → `publicImageUrl(key,'hero')`, else `file?.uri`), `?? []` guard kept. Live product page unaffected (correctly reads backend-hydrated `imageKeys`). On-device confirmation owed (Ψ).
+- **(low)** ~~Unused `getTranslation` helper in `oglasino-expo` `PreviewProductDialog.tsx` — pre-existing dead code, lint-flagged. Sweep on next touch.~~ **Fixed (code) 2026-06-01 (session bug-batch-3).** Dead `getTranslation` helper deleted from `PreviewProductDialog.tsx`; the orphaned `t`/COMMON_SYSTEM binding it solely fed was removed too (the audit's 'used elsewhere' claim was wrong — engineer caught it).
+- **(low)** `FilterConverter` type-mismatch on the selected-filters path — `oglasino-backend` `ProductForUpdateConverter` (~line 46 / the carried-over mapping). Maps a `Filter` entity through a `CategoryFilter`-typed converter, leaving `FilterDTO.basic`/`order` at defaults on the product's *selected* filters. Pre-existing, deliberately fenced off during the backend fix. NOTE: the NEW category-`filters` path does NOT have this problem (it maps through `CategoryConverter` correctly). **Parked 2026-06-01.** Confirmed real by the backend audit (`audit-backend-filterconverter.md`): `ProductForUpdateConverter` maps a bare `Filter` to `FilterDTO` on the selected-filters path; no `Converter<Filter,FilterDTO>` exists, so `FilterConverter` (typed `CategoryFilter→FilterDTO`) is bypassed and the default mapper leaves `basic`/`order` at `false`/`0`. Mechanism is converter-bypassed (not run-and-dropped). Blast radius is one site — category and catalog paths pass `CategoryFilter` and are correct. Confirmed HARMLESS: both the web and the mobile update-product forms source filter layout/grouping from the CATEGORY filters and read the SELECTED filters only for pre-selected values — neither reads `basic`/`order` off the selected filters (web: `MetaDataProduct.tsx`; mobile: `MetaDataProduct.tsx:33–56`, grep for basic/order/sort returns nothing). Parked under Part 4a — no consumer reads the defaulted fields, so fixing wrong-but-unread data isn't worth the test churn. Fix shape if a future consumer ever reads them (Option A from the audit): in `ProductForUpdateConverter`'s selected-filters loop, resolve the matching `CategoryFilter` from the product's category chain and map THAT through `FilterConverter`; do not alter `FilterConverter`. Test gap noted: `ProductForUpdateConverterTest` nulls `filterValues`.
+  > **Fixed 2026-06-04 (`e4-filterconverter-fix`, `dev`).** Option A landed in `ProductForUpdateConverter` — selected filters now resolve their `CategoryFilter` from the product's category chain and map through `FilterConverter`; falls back to prior behavior when a selected filter is absent from the chain. 2 new tests, full suite 942 green. Correction to the original note above: the bypassed default left `order` at `useDefaultOptionsOrder ? 1 : 0`, not strictly `0` (non-deterministic) — the matched path now bypasses this entirely.
+- **(low/medium)** ~~Web latent price-gate coupling — `oglasino-web` `page.tsx:402`/`:481`. The price/currency render block is gated on `productDetails.topCategory`; if category ever stops arriving, the price field silently disappears. Not biting now (categories arrive post-`ProductForUpdateDTO` fix), but worth a guard.~~ **Fixed 2026-06-01 (oglasino-web `dev`, session price-gate-guard-1).** Price/currency block decoupled from category *presence* — gate changed from `topCategory && !topCategory.freeZone` to `!topCategory?.freeZone` at page.tsx:402/:481; price now renders whether or not `topCategory` arrived, free-zone exclusion preserved.
+
+---
+
 ## 2026-06-01 — Theme toggle segments use raw untranslated value as accessibility label (web + mobile)
 
 **Repo:** `oglasino-web` + `oglasino-expo` · **Severity:** low · **Status:** open
@@ -27,19 +439,27 @@ Append-only log of out-of-scope findings. Newest at the top. Each entry has a da
 
 - [x] **(medium)** ~~Owner product page — a **Follow** button appears in the user-info section when viewing your *own* product, and the same Follow button appears on your own user page. Follow should not render on your own profile/products (self-follow). Hide it when the viewed owner is the current user. (Distinct from the stray **Send** button in the same user-info section logged in the 2026-05-31 Ψ batch below.)~~ **Fixed (code) 2026-06-01** (`oglasino-expo` `new-expo-dev`, session `qa-batch-1`). `ProductUserDetails.tsx`: Follow render gated `!userDetails.iamActive` at the call site (single caller; same owner signal as the adjacent Send/Share buttons). Hides on both surfaces. On-device confirmation owed.
 - [x] **(medium)** ~~Featured / "more products" section — the section title renders the raw interpolation placeholder: `Jos proizvoda is {value} (10)`. The `{value}` token is not being substituted (the count appears separately as `(10)`). Wire the count into the placeholder, or fix the key/interpolation, so the literal `{value}` is not shown.~~ **Fixed (code) 2026-06-01** (`oglasino-backend` `dev`). Root cause was a backend translation-seed defect, not the mobile call site (mobile passes `{value}` correctly). The `category.products` (EXTRA_PRODUCTS) seed wrapped the placeholder in ICU-escaping single quotes (`'{value}'`) in all four locales, plus a stray extra `}` in EN/RU. Session `category-products-icu-1` stripped the quotes (Igor's call: bare category name, matching the majority no-quote convention) and removed the stray `}`. Verified via intl-messageformat. Takes effect on next DB reset. On-device confirmation owed against a freshly-seeded build.
-- [ ] **(medium)** Dashboard update-product page — product images are not displayed.
-- [ ] **(medium)** Dashboard update-product page — some filters and the category are missing from the form.
-- [ ] **(medium)** Dashboard update-product page — the whole screen should be compared field-by-field against the web update-product form to find everything missing (the two items above may be a subset). Action: a parity audit of mobile update-product vs. web.
+- [x] **(medium)** ~~Dashboard update-product page — product images are not displayed.~~ **Fixed (code) 2026-06-01** (`oglasino-expo` `new-expo-dev`, product-update-parity). Root cause: `ImagesImport` sized its `expo-image` via NativeWind `className`, but `expo-image` is not `cssInterop`-registered in the project, so dimensions collapsed to 0×0 (NOT a backend/keys problem — keys arrive fine; confirmed because the same images render on the portal product page in the same app). Fixed via inline `style` dimensions. The earlier `imagesData` hydration fix in the same feature also resolved an untouched-save image-wipe data-loss bug (display and submit now share one `imagesData` source; an untouched save no longer sends `imageKeys: []` and wipes all images). On-device confirmation owed.
+- [x] **(medium)** ~~Dashboard update-product page — some filters and the category are missing from the form.~~ **Fixed 2026-06-01** via the backend `ProductForUpdateDTO` (owner product-load now returns the three category objects with `labelKey` + nested `filters`; see [decisions.md](decisions.md) 2026-06-01). Web zero-code, verified live by Igor; mobile zero-code (reads fields it already expected) — category labels + the full filter set now populate. On-device confirmation owed for mobile.
+- [x] **(medium)** ~~Dashboard update-product page — the whole screen should be compared field-by-field against the web update-product form to find everything missing (the two items above may be a subset). Action: a parity audit of mobile update-product vs. web.~~ **Closed as answered 2026-06-01** (Igor's call). The Phase-2 expo create + update audits and the web scaffold/update audits, plus the create + update parity fixes (images, category + filters, Preview crash / false-banned / scroll, Delete button, three-section layout), substantially answered the field-by-field comparison. On-device Ψ on the individual fixes is still owed and tracked per-item above and in the `state.md` Risk Watch.
 - [x] **(low)** ~~User settings — the Danger Zone block should be visually distinct: a red border around the block, and the (delete) button rendered as an outlined button.~~ **Fixed (code) 2026-06-01** (`oglasino-expo` `new-expo-dev`, session `cosmetic-qa-batch-1`). Block wrapped in `rounded-md border border-red-600 p-4`; delete button switched to `variant="outline"` + `border-red-600` + red label. Visual only. On-device confirmation owed.
 - [x] **(medium)** ~~Reviews — the reviews UI is rough; needs a UI/UX pass for layout and readability.~~ **Fixed (code) 2026-06-01** (`oglasino-expo` `new-expo-dev`). Three sessions: `cosmetic-qa-batch-1` added inter-card spacing; `dashboard-reviews-buttons` removed the dead given-card action row (a no-op Delete + a blank-label self-report no-op); the reviews-layout session fixed the clipped-last-card (screen root `items-center`→`flex-1`, FlatList `flex:1`) and made cards full-width (`w-full` on both card wrappers; shared `ProductReview` untouched). Web parity: dead given-card Delete also removed from `oglasino-web` (`GivenReviewCard.tsx`, session `given-review-delete-removal-1`). On-device confirmation owed. (Note: re-rated low→medium during the chat — the "rough UI" turned out to include two non-functional buttons and a layout clip, not just spacing.)
-- [ ] **(medium)** Dashboard product list — activate/deactivate gives no immediate feedback: after tapping deactivate/activate, the product's state in the list does not update until the user pull-to-refreshes. The toggle should reflect immediately (optimistic update or local refetch of the affected row) rather than forcing a manual scroll-to-refresh.
+- [x] **(medium)** ~~Dashboard product list — activate/deactivate gives no immediate feedback: after tapping deactivate/activate, the product's state in the list does not update until the user pull-to-refreshes. The toggle should reflect immediately (optimistic update or local refetch of the affected row) rather than forcing a manual scroll-to-refresh.~~ **Fixed (code) 2026-06-01 (session bug-batch-3).** Added optimistic row update — on a successful toggle the row's `productState` flips immediately in local list state (ACTIVE/INACTIVE per action), additive to the existing `onRequestProductRefresh` refetch which remains the eventual-consistency reconciler. No flip on failure. On-device confirmation owed (Ψ).
 - [x] **(low)** ~~AI generate-description (product name → description) — while generating, the loading overlay is see-through: the content behind it is fully visible, so it doesn't read as a blocking/busy state. The overlay needs an opaque (or dimmed) backdrop so the screen behind is obscured during generation.~~ **Fixed (code) 2026-06-01** (session `cosmetic-qa-batch-1`). `src/components/LoadingOverlay.tsx`: added `bg-black/50` to the transparent backdrop layer. On-device confirmation owed.
-- [ ] **(medium)** Product creation dialog — region/city is asked even though the user already has a region and city set on their profile; the creation flow lets you pick a new region/city for the product instead of defaulting from the user's saved values. Action: a parity audit of the product **creation** dialog (mobile vs. web) — expo needs to be adjusted to match web. (Companion to the update-product parity item above, which covers the **update** screen.)
-- [ ] **(medium)** Product creation dialog — the dialog title is not visible on step 2 and higher; it renders only on the first step. Across the multi-step flow the user loses the title (and with it the orientation cue for which dialog/step they're on) past step 1. Show the title on every step. (Distinct from the region/city defaulting item directly above — same `ProductCreationDialog`, separate defect.)
+- [x] **(medium)** ~~Product creation dialog — region/city is asked even though the user already has a region and city set on their profile; the creation flow lets you pick a new region/city for the product instead of defaulting from the user's saved values. Action: a parity audit of the product **creation** dialog (mobile vs. web) — expo needs to be adjusted to match web. (Companion to the update-product parity item above, which covers the **update** screen.)~~ **Fixed (code) 2026-06-01** (`oglasino-expo` `new-expo-dev`, session `product-create-parity-1`). Region/city is now display-only, sourced from `useAuthStore().user.regionAndCity` (matching web), guarded to render nothing when absent — not collected, not on the wire (was: an editable picker the user filled and the wizard then discarded). On-device confirmation owed.
+- [x] **(medium)** ~~Product creation dialog — the dialog title is not visible on step 2 and higher; it renders only on the first step. Across the multi-step flow the user loses the title (and with it the orientation cue for which dialog/step they're on) past step 1. Show the title on every step. (Distinct from the region/city defaulting item directly above — same `ProductCreationDialog`, separate defect.)~~ **Fixed (code) 2026-06-01** (same session `product-create-parity-1`). The dialog title now shows on every non-terminal step; reused the existing `currentStep !== steps.length - 1` predicate (was: step 0 only). On-device confirmation owed.
 - [x] **(low)** ~~Empty category — when a category has no products, the empty-state text is not centered.~~ **Fixed (code) 2026-06-01** (session `cosmetic-qa-batch-1`). `catalog/[...categories].tsx`: `text-center` on the empty-state `<Text>` + `px-4`. On-device confirmation owed.
-- [ ] **(medium)** Catalog filters — the mobile filters are not right and have filters missing versus web. Action: re-validate the expo filters against the web filter set and bring them to parity (which filter types/options render, and which are absent). (Distinct from the update-product-form "some filters and the category are missing" item above, which is about the **update-product** form; this is the **catalog/browse** filtering surface. See also the resolved 2026-05-31 "SELECT-type catalog filter has no dispatch branch" entry below — confirm against the current backend filter contract during the audit.)
+- [x] **(medium)** ~~Catalog filters — the mobile filters are not right and have filters missing versus web. Action: re-validate the expo filters against the web filter set and bring them to parity (which filter types/options render, and which are absent). (Distinct from the update-product-form "some filters and the category are missing" item above, which is about the **update-product** form; this is the **catalog/browse** filtering surface. See also the resolved 2026-05-31 "SELECT-type catalog filter has no dispatch branch" entry below — confirm against the current backend filter contract during the audit.)~~ **Fixed (code) 2026-06-01** — catalog-filters parity pass (`oglasino-expo` `new-expo-dev`, sessions `catalog-filters-2`/`-3`/`-4`, behind a web reference audit + expo gap audit + backend price/random audit + web region/city wire audit). The "filters missing / not right" symptom was primarily the RANGE/DATE serialization bug: catalog range and date filters rendered but dropped `rangeFrom`/`rangeTo` from the request, so they filtered nothing, showed no chip, and added 0 to the count (Finding 1, fixed end-to-end). Also: owner dashboard narrowed to web's set — dynamic per-category filters + show-more gated off, product-state restricted to ACTIVE/INACTIVE, DELETED dropped (Finding 2); active-filter count aligned to web (1 per selected-filter entry) and single-sourced to `getActiveFilterCount` (Finding 3); region/city auto-collapse to region when all cities selected one-by-one (Finding 5). Price-string bounds, random suppression, and the region/city wire shape were all confirmed already correct (no code) — the region/city wire "mismatch" was a retracted false alarm; mobile already sends web's exact `selectedRegionsAndCities: {regions,cities}` object shape. On-device Ψ owed before adopted/mobile-stable. See decisions.md 2026-06-01.
+
+- [x] **(low)** ~~Catalog category page — text-search placeholder shows the full category path. On a category page, search scopes to the current category and its child categories (correct behavior). The placeholder currently reads `Search in {topCategory}/{subCategory}/{finalCategory}`, which overflows and gets cut off — and when the user is in a final (leaf) category the path is clipped mid-string. Change it to show only the current category — `Search in {currentCategory}` — and if even that is too long, truncate with an ellipsis (`…`). Placeholder-text fix only: the search scope is unchanged (still searches the current category plus its children).~~ **Fixed (code) 2026-06-01 (session bug-batch-3).** Placeholder now shows the deepest/current category via the existing `navigation.search.label.one` key instead of the full Top/Sub/Final path; search scope (category IDs) untouched. On-device confirmation owed (Ψ).
+- [x] **(medium)** ~~Cold start / reload lands on the notifications screen — reloading the Expo app, or opening it from a killed/dead state, lands on the notifications screen instead of the home/product feed. It should land on the home page where the user sees products. Fix the initial route so a cold launch / reload restores home, not notifications.~~ **Fixed (code) 2026-06-01 (session bug-batch-3).** Not an initial-route issue — the boot push handler (`PushNotificationsInit`) re-fired `router.push('/notifications')` off a stale `getLastNotificationResponse()` and its catch-all `default` branch. Fixed both: dedupe the handled-response identifier (persisted in AsyncStorage, key `LHNR`) so a stale response no longer navigates on cold start/reload, and narrowed the `default` branch so unknown categories no longer blanket-push notifications. Genuine fresh taps still navigate. On-device confirmation owed (Ψ).
+- [x] **(low)** ~~Notifications are unstable — visible at one moment, gone the next (intermittent visibility). Per Igor, this is expected to be resolved by the notifications feature, so it is logged here for tracking rather than scoped as standalone bug-fix work.~~ **Fixed (code) 2026-06-02 — notifications feature, expo E1** (flicker root cause: listener re-subscribe on user-object identity + wholesale array replacement; fix subscribes on `firebaseUid`, single live listener, reconciles updates/deletes, cursor/first-page fix); **on-device confirmation done 2026-06-02 (Igor)** — fully closed.
 
 > Related: the open 2026-05-31 update-product crash (`regionAndCity` undefined) entry directly below is a separate defect on the same dashboard update-product screen. Open batch — Igor may append more items.
+
+> **Note 2026-06-05.** All line items in this batch are fixed-in-code (each marked [x]).
+> What remains is on-device (Ψ) confirmation, tracked in state.md Risk Watch — NOT open
+> bug-fix work. This entry stays open only as a standing container for new on-device finds.
 
 ---
 
@@ -76,6 +496,10 @@ Append-only log of out-of-scope findings. Newest at the top. Each entry has a da
 - [x] **(iOS + Android · medium)** ~~Privacy Policy and Terms of Use open old / outdated links~~ **Fixed 2026-06-01** (`oglasino-expo`, `new-expo-dev`, session `legal-link-targets-1`; device-confirmed). The two in-app MarkdownViewer screens fetched stale GitHub raw files (privacy.md / terms.md); re-pointed to the current targets privacy-policy.en.md / terms-of-use.en.md under the same memento-tech/oglasino-platform/refs/heads/main/ path. English-only content is the platform-wide state (blocked on lawyer review, 2026-05-27) — not a mobile bug.
 
 > Open batch — Igor may append more items as the Ψ smoke continues.
+
+> **Note 2026-06-05.** All line items fixed-in-code; most device-confirmed inline. This
+> entry stays open only as a standing container for further Ψ-smoke finds, not as open
+> bug-fix work.
 
 ---
 
@@ -120,13 +544,15 @@ One key remains pending verification: `errors.user.not.pending.deletion` (`USER_
 
 ## 2026-05-31 — Mobile: new-expo-dev carries a large uncommitted change set
 
-**Repo:** oglasino-expo (new-expo-dev) · **Severity:** medium · **Status:** open
+**Repo:** oglasino-expo (new-expo-dev) · **Severity:** medium · **Status:** wontfix
 **Detail:** All Expo work since the branch point (admin removal, Φ chats, chats A–D,
 etc.) is uncommitted on `new-expo-dev` (~220 files in `git diff --stat HEAD`). With no
 commit boundary, per-session integrity checks cannot diff one session's changes against
 a baseline — a chat-D verification session confirmed it could not bind ~217 files to
 specific sessions. Recommend committing/staging the work as reviewable units soon; the
 risk compounds as the branch grows.
+
+> **Closed 2026-06-04 (prod-bug-sweep).** Process / commit-boundary item, owned by Igor — not a tracked bug. Closed.
 
 ---
 
@@ -311,7 +737,7 @@ A Docs/QA correction pass on the web spec — not the consent-mode-mobile chat's
 ## 2026-05-29 — Mobile's backend `/public/maintenance/active` check is redundant with the edge worker
 
 **Severity:** low
-**Status:** open
+**Status:** fixed
 **Found in:** `oglasino-expo` cold-start boot path (the `GET /public/maintenance/active` boot request, one of the four documented in the 2026-05-28 Φ3 cold-start entry below); `oglasino-router` (the Cloudflare Worker that owns maintenance state).
 **Detail:** Mobile polls the backend's `/public/maintenance/active` endpoint at boot to decide whether to show the maintenance screen. Per conventions Part 8, the Cloudflare router worker is the edge boundary — "Maintenance state, admin bypass, and origin forwarding live there." Every mobile API call already passes through that worker. A separate backend maintenance check is therefore architecturally redundant: maintenance is an edge concern, not a backend concern.
 
@@ -322,6 +748,11 @@ The check also can't do what it appears to do. Mobile is fully backend-dependent
 Surfaced by Igor directly (2026-05-29). Recorded here for triage; no engineering scoped yet.
 
 > Resolved by expo-maintenance-split — the dedicated backend `/public/maintenance/active` poll is removed; mobile maintenance is composed at the edge worker (`maintenance.backend.active`, or a failed `/actuator/health/readiness` probe) and surfaced via the `X-Oglasino-Maintenance` 503 header.
+
+> **Status corrected 2026-06-05.** Missed flip: the body's own resolution sub-note
+> (expo-maintenance-split removed the dedicated backend /maintenance/active poll; mobile
+> maintenance now composed at the edge worker) means this is resolved. Flipping open → fixed
+> to match the body. No new work.
 
 ---
 
@@ -533,9 +964,11 @@ const url = `https://raw.githubusercontent.com/memento-tech/oglasino-platform/re
 ## 2026-05-27 — No DOM test environment in `oglasino-web`
 
 **Severity:** low
-**Status:** open
+**Status:** parked
 **Found in:** `oglasino-web` project configuration.
 **Detail:** The project has no `@testing-library/react`, `jsdom`, or equivalent. Component-level tests (render, click, toast assertions) are not possible; service-layer tests cover backend interaction logic only. Adding DOM infrastructure would expand test coverage but is its own scope decision. Surfaced in version-checksums Brief 8.
+
+> **Parked 2026-06-04.** Own infra decision, not a bug — adding a DOM test stack is a scope choice, not a defect.
 
 ---
 
@@ -597,9 +1030,11 @@ const url = `https://raw.githubusercontent.com/memento-tech/oglasino-platform/re
 ## 2026-05-27 — `configurationService.tsx` return type contract misleading
 
 **Severity:** low
-**Status:** open
+**Status:** fixed
 **Found in:** `oglasino-expo/src/lib/services/configurationService.tsx:6`.
 **Detail:** Declares return type `Promise<ConfigMap>` but returns `null` on failure (lines 15, 17). The `.catch(() => undefined)` wrapper in `bootstrap()` doesn't catch non-thrown `null` returns. The `!configuration` check treats both `null` and `undefined` as failure, which is correct at runtime, but the type contract is misleading — callers see `Promise<ConfigMap>` when the actual return type is `Promise<ConfigMap | null>`. Surfaced as adjacent observation during the Φ2 refetch-loop investigation session (2026-05-27).
+
+> **Fixed (code) 2026-06-01 (session bug-batch-3).** Annotation corrected to `Promise<ConfigMap | null>`; caller already `?? {}`-guards. Type-only.
 
 ---
 
@@ -617,9 +1052,11 @@ const url = `https://raw.githubusercontent.com/memento-tech/oglasino-platform/re
 ## 2026-05-25 — About page content duplication across base sites
 
 **Severity:** low
-**Status:** open
+**Status:** wontfix
 **Found in:** `oglasino-web/app/[locale]/(portal)/(public)/about/page.tsx`, `oglasino-web/src/metadata/generateAboutMetadata.ts`.
 **Detail:** `/rs-sr/about` and `/rsmoto-sr/about` render byte-for-byte identical content (same language, same translations, same hero image). Google may flag these as near-duplicate pages despite separate hreflang clusters. Accepted by the SEO foundation feature ([decisions.md](decisions.md) 2026-05-24 entry on `base-site-scoped` hreflang mode). If it causes crawl-budget or ranking problems post-launch, consider consolidating to a shared about page with `all-locales` hreflang. Surfaced by the 2026-05-25 image-alt-translation base-site audit.
+
+> **Wontfix (Igor, 2026-06-04)** — only the language differs and the content is correct as-is; no change is possible without altering SEO behavior, and the SEO-foundation feature already accepted this (decisions 2026-05-24). Closing as a recorded SEO decision, revisit via Search Console post-launch if it ever bites.
 
 ---
 
@@ -646,7 +1083,7 @@ const url = `https://raw.githubusercontent.com/memento-tech/oglasino-platform/re
 ## 2026-05-25 — Auth listener null-path doesn't run full store cleanup
 
 **Severity:** low
-**Status:** open
+**Status:** fixed
 **Found in:** `oglasino-expo/src/lib/store/authStore.ts` (the `initAuthListener` null-path branch).
 **Detail:** Φ1 added two code paths that call `auth.signOut()` outside of `authStore.logout()` (F5's axios 403 interceptor and F4's foreground re-validation listener). When sign-out is triggered from these paths, the `onIdTokenChanged(null)` listener fires and sets `user: null` but does NOT run the full user-scoped store cleanup (chat, favorites, notifications, portal filter, dashboard filter) that `authStore.logout()` performs. Stores retain stale data until the next `authStore.logout()` call or app restart.
 
@@ -654,10 +1091,12 @@ Severity is low because: (1) the user is immediately navigated to the public sur
 
 Surfaced by the Φ1 Brief 7 engineer (F5 — 401/403 interceptor) as a Part 4b adjacent observation. Fix path: either add the full store cleanup to the listener's null-path branch (mirroring `authStore.logout()`'s cleanup sequence), or route interceptor sign-outs through `authStore.logout()` instead of calling `auth.signOut()` directly. Engineer audits and picks at Ω-chat time.
 
+> **Fixed 2026-06-04 (prod-bug-sweep, `new-expo-dev`).** Extracted a module-level `clearUserScopedStores()` helper (store-clear steps only — NOT `set({user:null})`, NOT `logoutFirebase()`, which would re-fire `onIdTokenChanged(null)` and recurse), called from both `logout()` and the `onIdTokenChanged(null)` listener branch. Interceptor / foreground sign-outs now clear stale chat / favorites / notifications / filter state. 515 tests pass. See `sessions/2026-06-04-oglasino-expo-prod-bug-sweep-1.md`.
+
 ## 2026-05-25 — `oglasino-expo` has two Firebase auth listeners on overlapping events
 
 **Severity:** low
-**Status:** open
+**Status:** parked
 **Found in:** `oglasino-expo/src/lib/store/authStore.ts` (`initAuthListener` uses `onIdTokenChanged`) and `oglasino-expo/src/components/init/InitFavoritesStore.ts` (uses `listenAuthState`, which wraps `onAuthStateChanged`).
 **Detail:** Φ1 Brief 4A switched the main auth listener from `onAuthStateChanged` to `onIdTokenChanged` to match web's pattern (fires on token rotation in addition to sign-in/out). `InitFavoritesStore` was correctly left untouched in Brief 3 (F22 — hydration race) because its Firebase-native listener doesn't have the Zustand hydration race. Result: two Firebase auth listeners run simultaneously, firing on overlapping events with different timing for token rotations.
 
@@ -665,16 +1104,20 @@ Benign today — the favorites listener doesn't call `syncUserToBackend`, so the
 
 Surfaced by the Φ1 Brief 4A engineer as a Part 4b adjacent observation. Fix path: consolidate to one listener — either move favorites init into the main `initAuthListener` callback, or have favorites subscribe to `useAuthStore` after `_hasHydrated` instead of running its own Firebase listener. Engineer audits and picks at Ω-chat time.
 
+> **Parked 2026-06-04 (prod-bug-sweep, Ω / post-prod).** Benign today — the favorites listener doesn't call `syncUserToBackend`; the events touch disjoint state. Consolidating now risks a load-order regression pre-launch. Recategorized as tidiness / Ω cleanup, not a launch blocker.
+
 ## 2026-05-25 — Circular module dependency in oglasino-expo auth wiring
 
 **Severity:** low
-**Status:** open
+**Status:** fixed
 **Found in:** `oglasino-expo/src/lib/config/api.ts` → `src/lib/store/authStore.ts` → `src/lib/services/authService.ts` → `src/lib/config/api.ts`.
 **Detail:** Φ1 Brief 4A introduced this cycle when adding `useAuthStore.getState().setRestored(true)` to the axios response interceptor in `api.ts`. All cross-module accesses are inside callbacks (runtime only, not module-evaluation time), so the cycle works without runtime issue today. Tests confirm; 109 passing throughout Φ1.
 
 The cycle is fragile to future refactors. If a future engineer adds a module-evaluation-time access (e.g., `const cached = useAuthStore.getState()` at module scope inside `authStore.ts`), the cycle becomes load-order-dependent and could fail at app boot.
 
 Surfaced by the Φ1 Brief 4A engineer as a known structural issue with explicit "dynamic only, no current runtime issue" framing. Fix path: extract the axios instance to a leaf module that neither `authStore` nor `authService` imports from. Engineer audits and picks at Ω-chat time.
+
+> **Closed 2026-06-04 (prod-bug-sweep) — already resolved.** The reported cycle no longer exists: `api.ts` no longer imports `authStore`; the DI-hooks pattern (`authInterceptors.ts`) already broke it. The issue description was stale against current code. No action needed.
 
 ## 2026-05-23 — Create path missing `PRICE_REQUIRED` enforcement
 
@@ -964,8 +1407,8 @@ Out of scope for the indicator-only brief that surfaced it.
 
 ## 2026-05-19 — Backend → web cache revalidation may not work in production via oglasino.com domain
 
-**Severity:** medium (verification pending)
-**Status:** open
+**Severity:** medium
+**Status:** fixed
 **Found in:** `oglasino-backend/src/main/java/com/memento/tech/oglasino/service/impl/DefaultWebRevalidationService.java`; Cloudflare router worker (`oglasino-router`); backend prod/stage env var `WEB_REVALIDATE_URL`.
 **Detail:** Group 2/3's backend → web cache-revalidation call POSTs to a URL provided via the `WEB_REVALIDATE_URL` env var. If that URL points at the `oglasino.com` domain (e.g., `https://oglasino.com/api/revalidate`), the Cloudflare router worker routes `/api/*` paths to the backend — meaning the backend POSTs to itself, hits no `/api/revalidate` endpoint, returns 404, and the web-side cache is never invalidated.
 
@@ -980,6 +1423,8 @@ Out of scope for the indicator-only brief that surfaced it.
 - Use a separate internal domain
 
 Verification first. If direct-URL works, close as "verified working" post-launch. If not, follow-up brief ships one of the alternatives.
+
+> **Fixed 2026-06-04.** Verified working in prod via direct-Vercel-URL (Igor, 2026-06-04).
 
 ---
 
@@ -1127,9 +1572,18 @@ Fix scope: zero code work pending. This entry tracks the verification gap; close
 ## 2026-05-16 — `isAllowedPath()` allowlist anti-pattern
 
 **Severity:** low
-**Status:** open
+**Status:** fixed
 **Found in:** `oglasino-web/src/components/client/initializers/FilterManager.tsx:52-66`.
 **Detail:** `isAllowedPath()` is an opt-in-by-string-matching list of paths embedded inside `FilterManager`. It grows one path at a time and forgets dynamic segments (the `[userId]` exclusion was its second documented failure). The mechanism has produced two real bugs so far: the original `/admin/products/[userId]` chip-no-op, and the in-app-nav broken state on `/admin/products` and `/owner/products` (the second was latent until the admin-filter-pipeline audit surfaced it). A different model — a per-route `enableFilterSync` opt-in prop, or moving `FilterManager` from layouts to page-level mounts — would remove the footgun. Feature-sized refactor; not bug-fix scope. Surfaced by the admin-filter-pipeline audit and fix sessions.
+
+> **Fixed 2026-06-05 (filter-batch).** The anti-pattern this entry describes was removed.
+> FilterManager was relocated from the 3 layouts to 5 page-level mounts and isAllowedPath()
+> was deleted entirely (the W7 mount relocation). A store-rehydrate regression that the
+> relocation introduced (filters cleared on product→logo→home) was then fixed via a
+> store-aware fresh-mount guard in FilterManager (keeping per-page mounting, NOT reverting
+> to the layout+allowlist arrangement). The opt-in-by-string-matching mechanism no longer
+> exists. Verified live by Igor (logo→home preserves filters; catalog category-switch and
+> hard-refresh both still work). Branch: web dev (staged, uncommitted per process).
 
 ---
 
@@ -1178,9 +1632,11 @@ Fix scope: zero code work pending. This entry tracks the verification gap; close
 ## 2026-05-16 — 211 pre-existing ESLint warnings in `oglasino-web`
 
 **Severity:** low
-**Status:** open
+**Status:** parked
 **Found in:** `oglasino-web` — repo-wide
 **Detail:** `npm run lint` reports `✖ 211 problems (0 errors, 211 warnings)` on `dev`. All 211 are pre-existing — none introduced by the 2026-05-16 dependency-upgrade work that surfaced them. Categories: `react-hooks/exhaustive-deps`, `@typescript-eslint/no-explicit-any`, `@next/next/no-img-element`. Pre-launch this is tolerable; the count is the kind of slow drift that becomes invisible. Worth one focused lint-cleanup brief at some point, but not blocking anything. Found by the web dependency-upgrade engineer (2026-05-16).
+
+> **Parked 2026-06-04 (prod-bug-sweep).** Optional cleanup pass; 0 errors throughout — not a launch blocker. **Baseline corrected: the count is now 142, not 211** (the six-fix prod-bug-sweep batch removed three `any`s landing at 143, then the exhaustive-deps suppression below took it to 142). The stale 211 figure is reconciled in `state.md`.
 
 ---
 
@@ -1209,9 +1665,11 @@ Fix scope: zero code work pending. This entry tracks the verification gap; close
 ## 2026-05-15 — `oglasino-web` tsconfig has `strict: false`
 
 **Severity:** low
-**Status:** open
+**Status:** parked
 **Found in:** `oglasino-web/tsconfig.json`
 **Detail:** Strict null-checks are not enforced. The filtersHelper-return-type-1 session surfaced the consequence: declared-optional fields can be de-`?.`-chained without tsc rejection, even when the field's type declaration says they may be undefined. This means the typechecker is silent on a class of real bugs — anywhere a `Type | undefined` value is used without a null guard, tsc will not complain. Moving to `"strict": true` (or at minimum `"strictNullChecks": true`) would surface every such site as a tsc error; some will be true bugs, most will be type-tightening work where the producer always emits but the declaration says otherwise. Scope is project-wide, not a single-file fix. Surfaced by the filtersHelper-return-type-1 session addendum.
+
+> **Parked (Igor, 2026-06-04)** — measured 214 errors under full strict (~73% null-safety family, spread over 72 files). Not a bug-batch item; deferred to a dedicated strict-mode cleanup chat. `strict` stays false until then.
 
 ---
 

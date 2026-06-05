@@ -26,6 +26,8 @@ Spec lives at `oglasino-docs/features/messaging.md` per the existing convention 
 Each becomes its own future Mastermind chat.
 
 - Push notifications for incoming messages. The `NotificationCategoryId.MESSAGE` enum value stays unwired.
+
+  > **Correction (2026-06-05):** `NotificationCategoryId.MESSAGE` is now wired and live as of **2026-06-02** — message-send push (push-only, no in-app doc) shipped with the Notifications feature; the enum value is set in `DefaultMessageNotificationService.java:132`. See [features/notifications.md](notifications.md) and state.md (Notifications). The "stays unwired" prose above describes the pre-Notifications state and is retained for history (append-only).
 - Admin welcome chat for new users (single designated admin, system chat that can't be blocked or removed). Design notes below in §13.
 - Message deletion (currently messages are immortal). Future feature; likely a 5-minute soft-delete window.
 - Message content moderation. Different abuse profile from product moderation; needs its own design with real abuse data.
@@ -527,6 +529,8 @@ Unchanged. `POST /api/secure/images/upload-tokens` and `/view-tokens` with `scop
 
 Unchanged for messaging. Backend never writes message notifications today (deferred per §1.2). The `NotificationCategoryId.MESSAGE` enum value stays in place but unwired.
 
+> **Correction (2026-06-05):** As of **2026-06-02**, `NotificationCategoryId.MESSAGE` is wired and live — message-send push shipped with the Notifications feature (set in `DefaultMessageNotificationService.java:132`). See the §1.2 correction note. The "unwired" prose above is retained for history (append-only).
+
 ### 6.5 `/api/public/notification/test` endpoint — removed
 
 The `NotificationsControllerTest` class in `src/main/java` registers a public, anonymous, body-controlled endpoint that writes notifications to arbitrary users. Pre-fix this is a notification-spam attack surface that also bypasses the F1 rule fix (because Admin SDK writes bypass rules).
@@ -767,6 +771,8 @@ Composes cleanly on top of this feature's data model. Open as a separate Masterm
 ### 11.2 Push notifications for incoming messages
 
 Wire `NotificationCategoryId.MESSAGE` through `DefaultNotificationsService.sendAsyncNotification`. Triggered either by backend endpoint called post-Firestore-commit by the sender's client, or by a Cloud Function listening on `chats/{chatId}/messages` writes. Architectural decision deferred.
+
+> **Correction (2026-06-05):** Shipped **2026-06-02** — `NotificationCategoryId.MESSAGE` is now wired and live (set in `DefaultMessageNotificationService.java:132`); message-send push is push-only with no in-app doc, emitted by the backend post-commit (no Cloud Function). See the §1.2 correction note. The "deferred" prose above is retained for history (append-only).
 
 ### 11.3 Receiver-in-`users[]` rule check
 

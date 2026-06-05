@@ -6,6 +6,494 @@ Format: each decision has a date, a one-line summary, the reasoning, and the alt
 
 ---
 
+## 2026-06-04 — Deep Linking (Universal/App Links): product & architecture decisions
+
+**Feature:** shareable `https://oglasino.com/...` links open the mobile app (iOS Universal Links / Android App Links). Custom-scheme `oglasino://` links already worked; this adds the verified-https kind. Spans `oglasino-router`, `oglasino-expo` (backend N/A, web deferred). See [features/deep-linking.md](features/deep-linking.md).
+
+1. **Openable paths: public only.** Product, user, catalog + static pages (about/pricing/privacy/terms/blog/free-zone). Secured routes (`/messages`, `/owner/*`) deferred — they'd need post-login return-path work not in v1.
+2. **Apex-only associated domains.** `oglasino.com` (prod) / `stage.oglasino.com` (preview); no `www`. The router 301s www→apex and verifiers don't follow redirects, so associated domains must point at the host serving the files directly.
+3. **Two-tier rollout (preview + production).** Every artifact (AASA, assetlinks, native config) tier-parameterized: production → `oglasino.com` + `44PHQVN8PB.com.oglasino`; preview → `stage.oglasino.com` + `44PHQVN8PB.com.oglasino.preview`. Apple Team ID `44PHQVN8PB` is constant across tiers (identifies the Apple account; public, not a secret); only the bundle ID differs. Preview is verifiable ahead of production (preview Android keystore has no Play Console dependency).
+4. **`.well-known` association files served directly by the router worker, not the web origin.** `/.well-known/apple-app-site-association` and `/.well-known/assetlinks.json` are served inline by `oglasino-router` (`src/index.ts`), short-circuited before the maintenance gate, origin forward, and KV reads, tier-correct per env. **Rationale:** origin-forwarding to Vercel let a maintenance window 503 them (can de-verify the domain association on OS re-verification), passed origin-emitted redirects through (verifiers don't follow them), and left Next's dotfile/extensionless serving uncertain. **Shifts ownership of these two paths web→router** and supersedes any prior assumption (incl. `seo-foundation.md` §11) that web serves them.
+5. **The compound locale segment is NOT discarded — it drives a strict-validated base-site switch with link-language filter resolution. (Supersedes the earlier "strip locale and discard" position.)** The locale in `https://oglasino.com/{baseSite}-{language}/...` is base-site + language, both load-bearing:
+   - `+native-intent` strips the segment for routing (the app route tree is locale-less) but parses and stashes `(baseSite, language)` via a read-and-clear side-channel; the locale travels beside the path, never in it.
+   - Boot Gate 3 validates **strictly**: base-site must exist AND language must be in that base-site's `allowedLanguages`. **If either is invalid the whole link is untrusted → normal boot on the stored site** (no switch, no filters, no crash). A bad locale poisons trust in which language the filter words are in (e.g. `rs-cnr` is a near-miss between Serbian and Montenegrin with different filter labels), so it is rejected rather than guessed.
+   - If valid and the base-site differs, the app **switches base-site** (the data context — catalog/regions/cities/currency — is one `BaseSiteDTO`). Filters are resolved against the **link's language** (a fixed link-language translator over a transient in-memory label load), because web emits filter slugs in the link's language and they only match if resolved in it.
+   - **The user's preferred display language is never changed or persisted-over.** Resolved filters are language-independent objects, so they survive with the display in the preferred language. A loading curtain holds (`status` stays `'booting'`) across the switch so there is no flash; the portal mounts once — switched, in the preferred language, filters applied, single feed fetch.
+6. **No display-language auto-switch.** Consequence of #5: a shared `rs-en` link does not change what language the user reads the app in; the link language is used only to resolve filters, then dropped.
+7. **Filter deep-linking (home + catalog).** A shared URL's filter query string populates and applies filters on open. **Strict on the locale** (it establishes trust), **lenient on individual filters** — within a valid link, filter values that don't resolve are skipped, not errors; apply what resolves. Mobile mirrors web's SSR `parseFiltersFromQueryParams` (slug-vs-slug, accent-robust), not web's lossy client-store hydrate.
+
+**iOS:** fully shippable now (Team ID + bundle known). **Android:** verification deferred per-tier on the signing-cert SHA-256 (see [issues.md](issues.md) 2026-06-04). **Verification:** on-device only (Ψ).
+
+**Rejected:** serving the well-known files from the web origin (the three failure modes in #4); discarding the locale after stripping it (loses the base-site + filter-language signal — superseded); auto-switching the display language to the link's language (changes what the user reads for a shared link — rejected for #6); treating an invalid locale leniently / guessing the base-site or language (poisons filter-word trust — strict-reject instead).
+
+---
+
+## 2026-06-04 — Review listings tolerate a missing translation row at read time (jpa-fetch-tuning Batch 4)
+
+Review listings (public, owner, admin) now render gracefully when a review has no translation row for the reader's current language — falling back to the review's **original** (human-written, non-auto-translated) row, then any available row, then empty fields — instead of throwing. The read path fetches **all** language rows for the page's reviews in **one** batched query and resolves in memory, so the single-query-per-page property is preserved (no per-row query reintroduced).
+
+The write-side cause was **deliberately not fixed** in this feature: review creation generates the non-author-language rows inside an OpenAI call whose exceptions are swallowed, so an OpenAI outage at creation time persists a review with only the author's-language row.
+
+**Rationale:** the previous throw was a reachable production 500 — a single translation-less review 500'd the entire listing page. Making the read path resilient is the safe, contained fix and ships with jpa-fetch-tuning. Fixing the write-side (OpenAI retry / backfill) is separate translation-pipeline reliability work, out of scope for fetch tuning, and no longer launch-blocking now that the read path cannot crash. Recorded so a future reader understands why the read path tolerates missing translations and where the underlying write-side gap still lives.
+
+**Rejected:** keeping the throw (a reachable 500 on a user-facing endpoint); a base-site-default-language fallback (not plumbed to the converter and can itself be absent — strictly worse than the original-row fallback); a second batched query for default-language rows (the single all-languages `IN` query is cheap and page-bounded); fixing the write-side within this feature (out of scope — separate translation-pipeline reliability work).
+
+---
+
+## 2026-06-04 — Backend authorization is default-deny (H1)
+
+`SecurityConfig.authorizeHttpRequests` now terminates in `anyRequest().authenticated()` (was `permitAll()`). The public surface is explicit and small: `OPTIONS /**`, `/actuator/health/**` (unauthenticated — the docker healthcheck and the edge mobile-liveness probe carry no token), `/error`, `/health`, `/api/public/**` + `/api/auth/**` + `/internal/**`; `/actuator/prometheus` + `/actuator/info` are `denyAll`. Adding a public endpoint now requires an explicit matcher — the safe default is "denied," not "open."
+
+**Note:** with `formLogin`/`httpBasic` disabled and no custom `AuthenticationEntryPoint`, all unauthenticated denials return **403** (`Http403ForbiddenEntryPoint`), not 401. This corrects the original 2026-06-03 audit's "401" expectation; the security invariant (denied-is-denied) is unchanged.
+
+**Rejected:** blanket-permitting `/actuator/**` (would re-expose prometheus/info); leaving `anyRequest().permitAll()` with per-path opt-out (the H1 finding itself — allow-by-default is the wrong posture for a server).
+
+---
+
+## 2026-06-04 — Admin is provisioned out-of-band, not by code or email (H2)
+
+Admin is now a per-environment seeded DB row (`data/admin/data-admin-{dev,stage,prod}.sql`) keyed on that env's Firebase UID, idempotent via `ON CONFLICT (firebase_uid) DO NOTHING`; registration is unconditionally `ROLE_BASIC`. The hardcoded `admin@oglasino.com` email-literal grant and the JSON test-data admin seed were both removed.
+
+Per-env SQL selection is achieved by each env's own yaml listing an explicit admin file — there is **no** `data-${profile}.sql` convention; all envs otherwise load identical globs. Future per-env seeds follow this explicit-per-yaml pattern.
+
+**Rejected:** keeping the email-literal grant (re-arming trap on a fresh-env seed or delete-and-recreate); a `data-${profile}.sql` auto-selection convention (doesn't exist today; explicit per-yaml listing is clearer and matches the as-built mechanism).
+
+---
+
+## 2026-06-04 — XSS defense is render-time output-encoding, not backend input-encoding (M1)
+
+The `InputSanitizationFilter`/`Sanitizer.sanitize` HTML-entity-encoding at the input layer was removed. It was the wrong layer (it corrupted non-HTML consumers — mobile/JSON/ES — and double-encoded on re-render) and half-broken (it never overrode `getInputStream`, so the dominant JSON `@RequestBody` surface bypassed it anyway). XSS encoding now lives at the actual render points: web clients (React/RN escape by default; the JsonLd `<script>`-context escape landed web-side, Brief 3) and backend email bodies (`HtmlUtils.htmlEscape` at the interpolation point). The OWASP encoder dependency was dropped. `Sanitizer.stripNewlines` was retained as a live log-injection guard.
+
+**Hard sequencing (M1 gate):** the web JsonLd escape must reach an environment before or with the backend filter removal, or stored XSS reopens on public pages for the gap. Mobile needs no action (no DOM).
+
+**Rejected:** keeping input-layer HTML-encoding (wrong layer, already bypassed); replacing it with input-layer semantic hygiene only (trim/normalize) as a security control (output-encoding at the render point is the correct boundary).
+
+---
+
+## 2026-06-04 — Identity authority decoupled from subscription state (M3)
+
+`AuthUtils.subscriptionToAuthorities` now **always** emits the identity role (`ROLE_ADMIN`/`ROLE_BASIC`) and gates only the subscription-tier authority (`ROLE_<TIER>`) on an active subscription. Previously it returned zero authorities — including the identity role — when the subscription was inactive or null, so a lapsed-subscription admin lost `ROLE_ADMIN` and was locked out of every `@PreAuthorize` admin endpoint. Source values are server-derived (Part 11 clean); the bug was the coupling. The fix removes the dependency on the admin row's subscription columns entirely (the Brief 5 read-only check of that row is therefore no longer load-bearing).
+
+**Rejected:** leaving identity coupled to subscription (a real lockout risk for any lapsed/null-subscription admin; new users only worked by accident via their active free subscription).
+
+---
+
+## 2026-06-03 — Password reset: web-owned flow, email-channel provider help, no-leak request endpoint
+
+**[DECISION]**
+
+- **Web owns the entire reset flow; both platforms funnel to web.** `/forgot-password` (request entry) and `/reset` (oobCode confirm). Password change is pure client-side Firebase (`confirmPasswordReset`); the backend never sees the password and there is **no schema change**.
+- **Branded email via Admin SDK `generatePasswordResetLink` → Brevo** (oobCode extract-and-rewrite to `<webBase>/<locale>/reset`), reusing the email-notifications building blocks. The request endpoint `POST /api/auth/request-password-reset` is a sibling of `/auth/resend-verification`: unauthenticated, email-only, 60s + 4/day per-email Redis throttle on **separate keys**, no account-existence leak, coded responses.
+- **Provider gate:** send the reset link **iff the account's linked providers contain `password`**. The Firebase project is confirmed set to **"Link accounts that use the same email"** (one user per email; providers linkable), so the rule is *contains-password*, not *is-social*. Provider detected via Admin SDK `getUserByEmail().getProviderData()` — **not** the garbage `registeredWithProvider` column.
+- **"Option 4" (login-screen "this account uses Google" hint) is DROPPED.** Rationale: Firebase email-enumeration protection (on) makes a social-account email+password failure return the generic `auth/invalid-credential`, indistinguishable from a wrong password client-side; `fetchSignInMethodsForEmail` is neutered. The only client-side detections were (a) a backend login pre-check (a new enumeration oracle + latency) or (b) disabling enumeration protection (reopens the existence leak) — both rejected. All provider help moves to the **email channel**: a social-only account that requests a reset receives a branded "use your social sign-in" email instead of a reset link.
+- **No leak, no lie:** the endpoint returns an identical generic response and consumes limits identically across all four states (banned / unknown / social-only / has-password). Every **real** account receives an email (reset link or "use social"); only a **non-existent** email receives nothing. On-screen copy is conditional: "If an account exists for this email, you'll receive an email shortly." **Banned** emails receive no reset link and no email (a banned user must not reset back in; ban comms are owned by the reblock flow).
+- **Success-step app-deep-link is SCAFFOLDED but DEFERRED** to a later session (inbound browser→app handling does not exist in the app today). The web success page wires a dormant, TODO'd "Open in app" affordance with a single-constant scheme target so the later session drops in; the live behavior is the web "log in here" fallback.
+
+---
+
+## 2026-06-03 — DB Overload Protection spec authored (graduated throttle + auto-maintenance-trip)
+
+Backend-only graduated DB-pressure response: **YELLOW** sleeps each request, **RED** sheds with
+HTTP 503 + `Retry-After`, **CRITICAL** auto-flips the Cloudflare maintenance gate. Operator-alerted
+(email on RED, email + Telegram on CRITICAL) and forensic-logged to a new `incident_log` table.
+Spec at [features/db-overload-protection.md](features/db-overload-protection.md). Status `planned`;
+Phase 5 (engineering) not started. Authored at Phase-4 close behind a completed Phase-2 backend
+audit.
+
+The eight Phase-3 seam resolutions (the load-bearing decisions; substance from the spec's "Spec
+decisions" section):
+
+1. **Thresholds as fractions of the live pool size, not absolute counts.** The audit found
+   `maximum-pool-size` differs per env (dev 20 / stage 8 / prod 18). Absolute 13/14/17 was
+   prod-only and made CRITICAL unreachable on stage's pool of 8. The monitor reads
+   `getMaximumPoolSize()` live and resolves `ceil(ratio × size)` per poll. _Rejected:_ absolute
+   counts as Configuration rows — every pool-size change becomes two coordinated edits, and a
+   missed one silently mis-calibrates protection.
+
+2. **In-process `HikariDataSource` bean read for the pressure signal; no Prometheus.** There is no
+   `micrometer-registry-prometheus` on the classpath and the throttle runs in the same JVM as the
+   pool, so it reads the pool MXBean directly. _Rejected:_ a Prometheus HTTP scrape of its own
+   process — strictly worse than a direct bean read. Prometheus/Grafana operator-observability is
+   queued as a separate future chat.
+
+3. **Active-count gradient + `threadsAwaiting > 0` as the CRITICAL discriminator.** Active-count
+   saturates at pool max and cannot distinguish "busy" from "starving"; threads-awaiting is the
+   leading starvation signal (and `leak-detection-threshold` is disabled everywhere). CRITICAL gates
+   on count AND `threadsAwaiting > 0`. _Rejected:_ threads-awaiting as the sole signal — no gradient
+   below saturation.
+
+4. **Two-layer enable: per-env YAML master switch + live Configuration kill-switch.** The audit
+   found **no per-env Configuration seed exists** (all envs load the identical SQL), so a
+   Configuration row alone cannot express "off on dev / on in stage+prod." YAML carries the per-env
+   stance (`${ENV_VAR:default}`, the `app.images.sweeper.enabled` precedent); the Configuration
+   `throttle.runtime.enabled` row is the live override; both must permit. _Rejected:_
+   Configuration-only flags — same value everywhere, can't vary per env.
+
+5. **Poll interval in YAML, not Configuration.** `@Scheduled` resolves its interval from the Spring
+   Environment at bean construction and cannot read the runtime Configuration cache (user-deletion
+   crons precedent, decisions.md 2026-05-19). Thresholds and windows stay in Configuration
+   (read per-poll, not at construction).
+
+6. **`SERVICE_DEGRADED` in `SystemErrorCode` (post-`system-error-code-split`); 503 body carries
+   `translationKey`.** The split shipped, so `SystemErrorCode` is the home, not the old
+   `ProductErrorCode` dumping ground. The 503 body mirrors the as-built `RateLimitFilter` 429 body
+   (which already carries `translationKey`). Noted as a filter-layer extension of Part 7's
+   `{field, code}` envelope, **not** a Part 7 amendment.
+
+7. **Filter placement via the Security chain.** No filter declares `@Order`; only the Security chain
+   trio is deterministic. Registered via `SecurityConfig.addFilterAfter(requestThrottleFilter,
+   RateLimitFilter.class)`, mirroring how `RateLimitFilter` itself is placed — sidesteps the
+   undefined `@Component` ordering bucket rather than depending on it.
+
+8. **Auto-trip asserts maintenance-on (no-op if already on), writes BOTH web+backend flags, on a
+   timeout-bounded KV client, off the poll thread.** `toggleMaintenance()` is a flip — used raw it
+   would turn maintenance _off_ if it were already on when CRITICAL fired. The trip asserts on
+   instead. Writes both `maintenance.web.active` and `maintenance.backend.active` (operator decision
+   2026-06-03: backend overloaded ⇒ web unusable anyway). The KV client must be timeout-bounded — the
+   trip calls Cloudflare precisely when degraded, and the existing no-timeout `RestTemplate` could
+   hang the monitor thread on the very API the trip depends on; the write also runs off the poll
+   thread so it can't stall polling. _Rejected:_ raw `toggleMaintenance()`.
+
+**Factual vs inferred.** The audit findings (per-env pool sizes, no Prometheus on classpath, no
+per-env Configuration seed, the no-timeout KV `RestTemplate`, `@Scheduled` resolving at
+construction) and the operator decisions (write both flags, Prometheus out, threads-awaiting in,
+timeout-bounded KV in scope) are **factual** — the Phase-2 audit deliverable plus Igor's
+confirmations in the Mastermind chat. The threshold ratio defaults (`0.72` / `0.80` / `0.94`) are
+**inferred** starting guesses chosen to reproduce the original 13/14/17 intent against prod's pool of
+18; they are Configuration-tunable and flagged as such in the spec (§ 3.2, § 12).
+
+**Implementation note (2026-06-03, Phase-5 build).** Two implementation facts worth preserving for a
+future audit:
+
+- **`SlowQueryService` reads `pg_stat_statements` via `EntityManager.createNativeQuery`** — the only
+  such call in backend `src/main`. The house native-read idiom is Spring Data
+  `@Query(nativeQuery = true)`, which requires a domain `@Entity`; a system view is not an entity, so
+  the `EntityManager` native query is the idiomatic JPA read here. Justified, not a silent divergence.
+- **`IncidentLog` is a standalone `@Entity`** (BIGSERIAL / IDENTITY id, semantic `occurred_at`), **not**
+  extending the shared `BaseEntity` — a deliberate divergence for a forensic / append-only table,
+  approved in Session 1.
+
+---
+
+## 2026-06-02 — Message notifications are push-only with OS-collapse anti-spam (no in-app doc, no server unread-state)
+
+New-message notifications are delivered as **push only** — no in-app Firestore notification
+document is written for messages (the user already has the messages page; a bell-list entry would
+duplicate it). The push banner shows the actual message text (sender name as title, message body
+as body) — an accepted privacy tradeoff, standard messenger behavior.
+
+Anti-spam ("10 messages → one banner, not ten") is delivered by a **per-chat OS collapse key**
+(Android `collapseKey` / `tag`, iOS `apns-collapse-id`, Expo `collapseId`; on Firebase Web Push
+both the RFC-8030 `Topic` header AND the `Notification` tag), **not** by a server-side
+unread-state check. The backend always sends on every message-ping; the OS replaces the prior
+banner for that chat. This is best-effort (collapse is not guaranteed on every device/OS), and
+there is no in-app fallback surface for messages by design.
+
+- **Why not server unread-state.** The chat root doc carries no server-readable per-recipient
+  unread state (only a per-message `seen` field in a subcollection and a client-maintained
+  `unreadCount` sidecar that is already incremented by the time the ping fires). A
+  server-authoritative "first-unread" gate is therefore not possible without new presence
+  infrastructure, which was out of scope. Active-viewing suppression (don't surface a banner for
+  a chat the user currently has open) is a client-side concern, deferred (no clean signal existed
+  on either client at build time).
+- **Trigger.** Client→backend message-ping endpoint
+  (`POST /api/secure/notifications/message-sent`). The backend verifies via Admin SDK that the
+  authenticated caller is a participant of the chat and derives the recipient from the chat doc's
+  `users[]` — never from a client-supplied recipient field. Message text is client-supplied
+  **display content only** (the participant-verified sender's own message; not used in any
+  authorization / moderation / state decision). No Cloud Functions; fits the existing Spring +
+  Admin SDK architecture.
+- **Emitter (client → backend), confirmed on device 2026-06-02.** The trigger is a client
+  **emitter** that fires the ping post-commit, fire-and-forget: after the chat store commits the
+  message to Firestore, the client POSTs `{ chatId, messageText }` only (no recipient, no userId,
+  no anti-spam flag — the backend owns all of that). It never awaits into the send path and never
+  fires on a failed write (web W4, expo E3). **Image-only (no-text) messages:** the client sends
+  `messageText: ''` (empty string, key present — a consistent wire shape across both clients) and
+  the backend (B6) supplies a localized photo body (`notif.message.photo.body`, EN "📷 Photo") in
+  the recipient's `preferredLanguage`; the client never fabricates a body (expo E5, web W4).
+- **Alternatives considered.** A server-side first-unread gate (rejected — needs presence
+  infrastructure, out of scope); an in-app message-notification document (rejected — duplicates
+  the messages page); client active-viewing suppression (deferred — no clean signal at build
+  time).
+
+This supersedes the spec's earlier §2.1 "first-unread-per-conversation" server-unread-state
+wording, corrected to the as-built OS-collapse mechanism in the same close-out (see
+[features/notifications.md](features/notifications.md) §2.1).
+
+**Process note (recorded once).** The message-ping was built **receiver-first** (backend B4 endpoint)
+and the client **emitter** that calls it on message-send was never built — caught only during
+on-device verification, when no network call left the device on send (fixed by expo E3 + web W4,
+then B6 + E5 for image-only). The `mobile-stable` hold did its job: device verification surfaced
+the gap before the feature was marked done. Lesson for future features with a client→backend
+trigger: **brief the emitter and the receiver together**, not receiver-first.
+
+---
+
+## 2026-06-02 — Prefer `affectedKeys().hasOnly([...])` over per-field pinning when a Firestore doc schema is cross-repo-unverifiable
+
+For a Firestore security-rule `update` field-lock on a document whose full field set is owned by
+another repo (e.g. the backend Admin SDK writes the doc and the rules repo cannot verify the
+complete schema), prefer
+`request.resource.data.diff(resource.data).affectedKeys().hasOnly(['<allowed>'])` (plus a type
+guard such as `... .seen is bool`) over per-field equality pins.
+
+- **Why.** `hasOnly` enforces "only these keys may change" correctly for ANY schema and
+  additionally rejects added fields, whereas per-field pinning requires enumerating every other
+  field (a guess when the schema is cross-repo) and does not block newly-added fields.
+- **Scope / caveat.** The `messages`-update rule retains per-field pinning — its schema is
+  repo-local and fixed, so enumeration is safe and the existing idiom is kept for consistency
+  there. The two sibling rules therefore use different idioms **by design** (notifications:
+  `hasOnly`; messages: per-field), each chosen for its schema's verifiability.
+- **Applied in.** The notifications update rule
+  (`notifications/{userId}/userNotifications/{id}`) — the recipient may change only `seen`.
+
+---
+
+## 2026-06-02 — Docs-sync is a cleanliness rule: revalidate README/docs on every change
+
+Every repo now carries a root `README.md` (written this session across backend, web, expo,
+router, firestore-rules, image-worker, landing, maintenance, and docs; `oglasino-private`
+excluded by Igor). To keep them from drifting, a new **Part 4 (Cleanliness)** bullet binds all
+agents: when a change makes a `README` or any other doc stale (file/folder layout, commands,
+scripts, env vars, endpoints, status, cross-links), the doc is updated in the **same session** —
+the doc that describes a change is part of the change. The mirror rule is also in the Docs/QA
+`CLAUDE.md` hard rules.
+
+- **Ownership boundary.** Each engineer agent owns its own repo's `README` + `<repo>/docs/`;
+  Docs/QA owns `oglasino-docs`. The no-cross-repo-edits rule is unchanged — if a change in one
+  repo invalidates a doc in another, the agent flags it per Part 4b rather than reaching across.
+- **Why.** Docs/QA does not read code in the sibling repos, so a Docs/QA-only rule could not keep
+  engineer-repo READMEs fresh; the teeth have to live in the shared rulebook.
+- **Alternatives considered.** Keeping the rule Docs/QA-only (rejected — leaves the new READMEs
+  to rot); editing each engineer repo's `CLAUDE.md` (rejected — cross-repo writes are forbidden
+  and out of scope; conventions Part 4 is the shared lever).
+
+---
+
+## 2026-06-02 — GA4 mobile v1 shipped — strict mirror of web's catalog, mobile-stable
+
+All 13 events mirroring web's catalog (same names, param keys, PII rules) are now shipped on
+`oglasino-expo` (`new-expo-dev`). A single `track`/`trackError` wrapper over Firebase `logEvent`;
+consent+ATT-gated init; `user_id` set on auth resolve / cleared on sign-out. Verified on-device via
+Firebase DebugView on **both iOS and Android** (2026-06-02): all 13 events land with correct params,
+and `page_view` fires with no parallel auto `screen_view`, confirming the auto-screen-reporting
+disable took.
+
+- **Decisions that shaped it.** `page_view`, not native `screen_view`, reporting into the **same GA4
+  property as web** (`oglasino-stage-49abb`, ID 536855998) via the pre-existing mobile data streams —
+  auto-`screen_view` collection disabled in `firebase.json` so views don't double-count (confirmed
+  clean in the smoke). `sign_up`/`login` fire from the explicit auth methods, never the
+  `onIdTokenChanged` listener (no spurious cold-start `login`); `wasRegister` surfaced via a type-only
+  `AuthUserDTO` change, zero backend work. `exception` built RN-native (route `ErrorBoundary` +
+  ungated `ErrorUtils` global handler chaining to the prior handler + promise-rejection tracking).
+  `form_submit_failed` two shapes: the real Part-7 `code` on structured backend paths (product
+  create/update), synthetic codes (`DISPLAY_NAME_EMPTY`, `EMAIL_EMPTY`, `EMAIL_FORMAT`,
+  `PASSWORD_EMPTY`, `PASSWORD_INVALID`) on client-validated paths (register/login/profile).
+  `filter_change` debounced on a `searchText`-excluded projection of `FilteredProductList.filtersData`.
+  `sort_order`/`currency` read the string code off their DTO objects; `price` coerced to number.
+- **GA4 console.** Verified done — mobile data streams already existed in the shared property
+  (per-tier Firebase apps from the 2026-05-26 cloud-setup), App IDs match the GoogleService build
+  files, custom dimensions registered (mobile inherits them via identical param keys). Web's
+  `G-P0LEVEJ0V9`/`G-GNKB4WBNC0` are web-stream Measurement IDs, not used by mobile (which routes via
+  Firebase App ID).
+- **Process note (recorded honestly).** The eight transactional events were specified early but their
+  implementation session was initially missed; a premature closure attempt claimed all 13 shipped on
+  evidence for 5. Docs/QA caught the discrepancy and refused the closure; session
+  `oglasino-expo-google-analytics-v1-4` then implemented and verified the eight. Recorded so the audit
+  trail shows the catch and the correction.
+
+This closes the GA4-mobile Mastermind chat; the feature is `mobile-stable` on `new-expo-dev`. See
+[features/google-analytics-v1.md](features/google-analytics-v1.md) Platform adoption — Mobile (Expo).
+
+---
+
+## 2026-06-02 — iOS build requires `expo-build-properties.ios.buildReactNativeFromSource: true`
+
+`oglasino-expo` sets `expo-build-properties.ios.buildReactNativeFromSource: true` (alongside
+`useFrameworks: 'static'`) to build the iOS app. Required on Expo SDK 54 / RN 0.81 / Xcode 26: the
+precompiled `React.xcframework` + static frameworks (needed by Firebase + Google Sign-In) + explicit
+modules produce hard `-Werror` non-modular / cross-module failures in the react-native-firebase pods;
+building RN from source removes the precompiled-framework boundary and is the only approach that built
+green (verified locally on Xcode 26.2 → `Build Succeeded`). Intermediate workarounds — a
+`CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES` / `$RNFirebaseAsStaticFramework` config plugin,
+and `forceStaticLinking` — were tried and rejected as insufficient and removed from disk.
+
+- **Cost.** Longer iOS build times (no precompiled RN binaries). Tracked in `state.md` Risk Watch;
+  revisit on the next Expo SDK / RNFirebase bump — if upstream fixes the prebuilt-core path, the flag
+  can be dropped to restore faster builds.
+- **Refs.** expo/expo#39233, expo/expo#39607, invertase/react-native-firebase#8657.
+
+---
+
+## 2026-06-01 — Image pipeline closed — mobile `mobile-stable`; on-device smoke deferred
+
+The mobile image-pipeline is closed at `mobile-stable` on `new-expo-dev`. All four upload
+surfaces (product, profile, chat, review), `expo-image` display, raw-byte PUT via
+`expo-file-system`, the retry policy, orphan cleanup, and the per-stage progress text are
+implemented and validated; the iOS+Android rebuild carrying the V6 (HEIC label localization)
+and V9 (avatar + chat orphan cleanup) conformance fixes plus the `@react-native-community/netinfo`
+native module has landed.
+
+- **Smoke deferred, not skipped.** The 14-case on-device smoke
+  ([features/image-pipeline-mobile-test-cases.md](features/image-pipeline-mobile-test-cases.md))
+  is deferred — Igor's explicit call. Status was flipped to `mobile-stable` on Igor's confirmation
+  rather than on a completed device pass. Any failures surfaced when the smoke is eventually run
+  will be reported and resolved as ordinary follow-ups, not as a re-opening of the feature.
+- **Backend deferrals accepted, not re-dispositioned.** The backend-side deferred items are
+  carried as accepted deferrals, pre-production: no automated `deleteProduct`→image-cleanup e2e
+  test; the fire-and-forget JVM-kill cleanup window in `deleteProduct`; unverified `updateProduct`
+  cache invalidation; and R2 orphans from a partially-failed batch upload — the last already
+  resolved-by-decision via the 2026-05-31 sweeper entry. Considered and accepted at close, not
+  re-opened.
+- **Translations.** All `image.*` keys and the B15 picker-sheet keys (`image.source.title` /
+  `.camera` / `.gallery`) are seeded in all four locales. EN/RS are final; RU/CNR remain
+  placeholder pending native-translator review — the standing project-wide review debt, not an
+  image-pipeline blocker.
+- **Factual vs inferred (close-out convention).** Factual on Igor's 2026-06-01 confirmation:
+  code-complete, validated, rebuild landed, smoke deferred, backend deferrals accepted. Not yet
+  observed (inferred-pending): the on-device smoke result itself — deferred, so no device pass is
+  asserted by this entry.
+
+---
+
+## 2026-06-01 — Owner product-load response widened with display-only category objects (`ProductForUpdateDTO`)
+
+The owner product-load endpoint `GET /api/secure/products?productId=` now returns a dedicated
+read-only `ProductForUpdateDTO`, distinct from the update-request DTO. It carries the three category
+objects (`topCategory`/`subCategory`/`finalCategory`) as full `CategoryDTO` (with `labelKey` and nested
+`filters`), in addition to the mutable edit fields (`id, name, description, price, currency, filters,
+imageKeys`).
+
+- **Purpose.** Clients render the category read-only AND derive the category-specific filter set from the
+  nested `filters`. A label-only or ID-only response would not fill the filter form — the full object with
+  `.filters` is required. The change unblocked three latent symptoms on the consumers with no client code:
+  web's previously-blank category fields, the short filter list (was ~4 base-site filters; now the full
+  ~9–10 for the category chain), and the latent hidden-price gate — all opened by the contract change alone
+  (web verified live by Igor). Mobile reads the same fields it already expected.
+- **Trust boundary (Part 11).** Category remains server-immutable on the update WRITE path. The write path
+  still accepts the separate, unchanged `UpdateProductRequestDTO`, which has no category fields and is still
+  guarded against client-sent category fields. The widened response is read-only; it does not make category
+  bindable on update.
+- **Implementation note.** Reused the existing `CategoryConverter` (the create/catalog mapping path); no new
+  category converter was invented. The old `UpdateProductRequestConverter` was replaced by a new
+  `ProductForUpdateConverter` and deleted. Backend on `dev`. See [issues.md](issues.md) 2026-06-01 update-surface
+  resolutions and the carried-over `FilterConverter` selected-filters type-mismatch logged there.
+
+---
+
+## 2026-06-01 — `DialogWrapper` now uses the gesture-handler `ScrollView` (shared-component change, `oglasino-expo`)
+
+`DialogWrapper` (used by every dialog in `oglasino-expo`) now uses the `react-native-gesture-handler`
+`ScrollView` instead of the React Native one. The app is already wrapped in `GestureHandlerRootView`.
+
+- **Reason.** Dialogs with tall and/or interactive content (nested horizontal carousels, touchable rows) had a
+  scroll/gesture-responder dead-zone; the GH `ScrollView` arbitrates gestures through the gesture tree so the
+  whole dialog body scrolls.
+- **Consequence for future work.** Nested scrollables and touchables inside dialogs now coordinate correctly.
+  The earlier `FiltersDialog` workaround (its own inner `ScrollView` + `nestedScrollEnabled`) is no longer the
+  only pattern for tall dialog content.
+- **Verification.** Verified on device on the preview path (Igor, 2026-06-01) — the only item in the
+  create/update product-parity feature confirmed on a device so far. Because this is a shared-component change
+  affecting every dialog, the main scrolling dialogs (`FiltersDialog`, `AddUpdateProductDialog`, and any other
+  tall dialog) are to be confirmed still scrolling at/before commit; a regression there would be a separate
+  follow-up, not part of this feature. Branch `new-expo-dev` (Ψ-pending with the rest of the branch).
+
+---
+
+## 2026-06-01 — Expo catalog filters brought to web parity (code); five findings, two real bugs fixed
+
+The mobile (`oglasino-expo`) catalog/browse + owner-dashboard filter surface was audited
+against web (the parity reference) and brought to parity. Code-complete on `new-expo-dev`
+across three engineer briefs (`catalog-filters-2`/`-3`/`-4`) behind four read-only audits: web
+catalog-filters reference, web region/city wire-shape, expo current-state+gap, and a backend
+price/random contract check. On-device Ψ owed (shares the pending iOS+Android rebuild). Web
+does not change.
+
+**The two real bugs.**
+
+- **RANGE/DATE filters filtered nothing (the headline).** Mobile's request build
+  (`FilteredProductList.filtersData`) mapped only `optionIds` per selected filter and dropped
+  the `rangeFrom`/`rangeTo` that `addRemoveRangeFilter` stored on the same
+  `SearchSelectedFilter`. Range and date filters rendered, were selectable, but POSTed an empty
+  option filter — they filtered nothing, showed no removable chip, and added 0 to the
+  active-filter count. This is the substance behind Igor's on-device "filters are missing / not
+  right" report. Fixed end-to-end in `catalog-filters-2`: the request now carries
+  `rangeFrom`/`rangeTo` (the `RequestSelectedFilterDTO` type already declared both); a removable
+  chip is rendered per range/date entry (formatted with the filter's
+  `filterRange.rangePrefix`/`rangeSuffix`, cleared via the existing
+  `addRemoveRangeFilter(filter, undefined, undefined)` action); and each counts 1 in the badge.
+
+- **Owner dashboard showed catalog-only controls.** The shared `FiltersDialog` rendered the
+  dynamic per-category filters, the basic/advanced show-more split, and a `DELETED`
+  product-state option on the owner dashboard, where web's dashboard is narrow
+  (search/order/price/state-ACTIVE-INACTIVE). Fixed in `catalog-filters-3`: the dynamic-filter
+  block + show-more are gated on `currentPortalScope !== 'dashboard'` (reusing the predicate the
+  region/city control already uses), and the dashboard product-state options are restricted to
+  an explicit `[ACTIVE, INACTIVE]` list. The `ProductState` enum is untouched (DELETED stays
+  valid elsewhere); the public catalog surface is unchanged.
+
+**Active-filter count aligned and single-sourced.** Mobile summed total option counts (a
+2-option filter counted 2; range/date counted 0); web counts 1 per selected-filter entry. The
+formula was duplicated verbatim across `FiltersDialog.tsx` and `FloatingFiltersButton.tsx`.
+Both now call one shared `src/lib/utils/getActiveFilterCount.ts` that counts 1 per
+`selectedFilters` entry plus the unchanged price/order/region/city terms and the dashboard-only
+product-state term. `isDashboard` is a parameter because the dashboard term depends on
+`usePortalScope`, which lives outside the filter store — so a store selector could not own the
+whole formula. The two surfaces can no longer drift.
+
+**Region/city auto-collapse added (Finding 5).** When a user selected every city of a region
+one-by-one, mobile left N city selections; web collapses to the region. `catalog-filters-4` adds
+the collapse to the city-add path only — when the last city of a region is selected it drops
+that region's cities and pushes the region, reproducing byte-for-byte the end-state the
+region-select path already produced (same `setRegionCityValues` action, no new abstraction). A
+single-city region collapses on its one city. Region-select and city-unselect behavior are
+unchanged. Chips and count need no change — `SelectedFiltersDisplay` renders the `regions` map,
+and `getActiveFilterCount` sums `regions.length + cities.length`, so a collapsed region counts 1,
+matching web.
+
+**Three Finding-4 items closed with NO code work — including one retracted false alarm.**
+- **Price bounds:** `priceRange.from/to` are `BigDecimal`; Jackson's default scalar coercion
+  turns the JSON string `"1000"` into `BigDecimal` identically to the number `1000`, so mobile's
+  digit-string price bounds filter correctly. The "parse to number" change I would have applied
+  as a safe default was dropped. (Backend audit, `audit-catalog-filters-backend-price.md`.)
+- **Random suppression:** the backend drops `function_score` random ordering when `searchText`
+  is non-blank OR `orderBy` is set (`DefaultProductsFilterQueryBuilder.applyRandomIfNeeded`,
+  test-backed). Mobile's suppression (`applyRandom && !searchText && !orderBy`) already matches —
+  a correct no-op, not a divergence.
+- **Region/city wire shape — RETRACTED false alarm.** A backend read reported the server consumes
+  `selectedRegionAndCityValues` with inner `regionIds`/`cityIds` (`List<Long>`), flagging mobile's
+  `selectedRegionsAndCities: {regions,cities}` as a silent-drop bug. A targeted web wire audit
+  settled it: web sends `selectedRegionsAndCities: { regions: RegionDTO[], cities: CityDTO[] }`
+  (full objects, plural outer key) with no transform between the store and the POST body, and
+  web's region/city filtering works in production. Mobile already sends the identical shape. The
+  live backend consumes the object shape; the backend read was of a stale/sibling DTO the search
+  endpoint does not bind for this path. **No region/city wire change was made**; telling mobile
+  to "rename to `regionIds`/`cityIds`" would have broken working parity to chase a phantom.
+
+**Settled, no work (for the record):** FilterType enum (four values, no SELECT — confirmed both
+sides), definition source + `order`-merge, SINGLE/MULTI dispatch (both collapse to a multi-select
+checkbox list; `multiselection` is NOT honored on the catalog surface on either platform — the
+only component honoring it is the out-of-scope update-product form), RANGE/DATE rendering, search,
+ordering, currency, free-boolean, basic/advanced split (catalog), clear-all, random suppression
+rule, and the region/city request shape.
+
+**Out of scope (confirmed, not addressed here):** the update-product form's missing
+filters/category, the product-creation dialog's region/city defaulting, and admin filter surfaces
+(mobile is consumer-only since chat α). These are separate tracked items.
+
+**Process note — the targeted web wire audit earned its place.** When the backend audit and the
+web catalog audit disagreed about the region/city wire shape, a one-question read-only web audit
+was run rather than drafting a fix off the backend read alone. It retracted a phantom bug and
+prevented a parity regression. The general lesson: when two audits disagree about a wire contract,
+the reference platform's actual serialized body is ground truth — verify it before briefing a fix.
+
+**Factual vs inferred.** The five findings, the three shipped fixes, the three no-work closures,
+and the retraction are factual (four engineer session summaries + four read-only audits). The
+code-complete / Ψ-pending posture (do not promote to `mobile-stable` until on-device smoke) is
+Igor's confirmed call.
+
+---
+
 ## 2026-06-01 — Expo system theme shipped (code); mobile mirrors web's tri-state pattern, no new keys
 
 `oglasino-expo` gains a `'system'` (follow-OS) theme option, reaching parity with web's tri-state theme. Code-complete on `new-expo-dev` across three sessions (`-1` audit, `-2` implementation, `-3` key-removal fix); `verifying` pending on-device Ψ. Spec: [`features/expo-system-theme.md`](features/expo-system-theme.md). Web does not change.
@@ -584,6 +1072,7 @@ Web's two usages of `/api/public/baseSite/details` were trivially removable:
 - **Mid-feature scope expansion requires immediate spec amendment, not deferred-to-close.** The feature underwent two scope expansions in chat (`/baseSite/details` removal, then admin translation UX, then unified admin cache page). Spec amendments were appended in chat but `§11`'s brief order list wasn't kept current — the web engineer on Brief 11 paused implementation correctly because the spec didn't list Briefs 9-11. A small Docs/QA session amended `§11` mid-chat. Carry forward: any further scope expansion gets a spec amendment BEFORE the engineer brief, not after.
 
 - **`oglasino-web` uses `stage` branch, not `dev`.** Mastermind wrote `dev` in every web brief in this chat; engineer correctly stayed on `stage` per the hard rule (don't switch branches) and flagged on every brief. Carry forward: future web briefs say `stage`. Backend stays `dev`.
+  - **Correction 2026-06-01 (supersedes the carry-forward above for future briefs).** `oglasino-web` now works on `dev`. The entire create + update product-parity feature ran on web `dev` (all four web session summaries declare `Branch: dev`), and Igor has confirmed `dev` is the current web branch. **Future web briefs say `dev`, not `stage`.** The dated `stage` records in earlier entries (review-reports and error-code-domain-split, both 2026-05-29; expo-maintenance-split) remain accurate as history — web was on `stage` then; this corrects only the forward-looking rule, it does not rewrite where past work landed.
 
 - **RU translations use Latin transliteration with `''` (SQL-escaped apostrophe) for soft signs in infinitive verb forms.** Brief 9 engineer flagged Mastermind's RU drafts were missing this convention. Carry forward: future Mastermind RU drafts include `''` in transliterated infinitives (e.g., `sokhranit''`, `obnovit''`, `udalos''`). Brief 12 RU drafts already applied this.
 
@@ -1195,6 +1684,7 @@ End-to-end user-to-user messaging on Oglasino is production-ready: Firestore Sec
 - Brief 2 — Web messaging core (`oglasino-web`). Eleven sub-edits: rename + clearing fix + atomic batches + send-failure toast + temp state lifecycle + `getActiveChat` fallback + Load more + `deleteChat` reorder + mark-seen reorder + deleted-user fallback rendering + polish bundle. 154 web tests still passing post-change.
 - Brief 3 — Auto-linkify (`oglasino-web`). `linkify-it@5.0.0` chosen over `linkifyjs@4.3.3` based on size (5× smaller) and license. 12 new tokenizer tests.
 - Brief 4 — Backend admin + endpoint cleanup + translation seeds (`oglasino-backend`). `getReceiverFromChatDoc` fixed (high-severity per-page receiver bug); `NotificationsControllerTest` removed; two new `MESSAGES_PAGE` keys seeded in four locales; `NotificationCategoryId.MESSAGE` confirmed zero callers and intentionally left as a stub for future push-notification work. 539 backend tests passing.
+  - **2026-06-05: superseded** — MESSAGE is now live (set in `DefaultMessageNotificationService`); no longer a zero-caller stub.
 - Brief 5 — Sunday cleanup cron (`oglasino-backend`). New `pending_chat_cleanup` and `messaging_cleanup_locks` tables in V1; `DefaultMessagingCleanupService` with `@Scheduled` cron; cross-feature touch into `DefaultUserDeletionService.runHardDelete` (one repository insert). 11 cron + integration tests; first production Sunday is the live smoke (tracked in `issues.md`).
 - Brief 6a — `chats.load.more` key seed (backend) + web swap. One translation key seeded in four locales, one component call site swapped.
 - Brief 6b — This Docs/QA close-out.

@@ -2,8 +2,8 @@
 
 *Token-based upload + signed-URL view flow for product photos, profile pictures, brand assets, and chat attachments. Backend signs JWTs; Cloudflare R2 stores bytes; a Cloudflare Worker (oglasino-image-worker) verifies tokens at the edge.*
 
-**Status:** `web-stable`
-**Repos:** `oglasino-backend`, `oglasino-web`, `oglasino-image-worker` (Cloudflare Worker)
+**Status:** `mobile-stable` — closed 2026-06-01 (on-device smoke deferred per Igor; see [decisions.md](../decisions.md) 2026-06-01 entry)
+**Repos:** `oglasino-backend`, `oglasino-web`, `oglasino-image-worker` (Cloudflare Worker), `oglasino-expo`
 
 ---
 
@@ -587,7 +587,7 @@ With fail-fast batch semantics, partial upload batches leave R2 orphans. Sweeper
 
 ## Platform adoption
 
-Backend and web are complete. Mobile (`oglasino-expo`) is **implemented and validated** (on `new-expo-dev`); on-device smoke is the remaining gate before `mobile-stable` (see [image-pipeline-mobile-test-cases.md](image-pipeline-mobile-test-cases.md) and the [decisions.md](../decisions.md) 2026-05-30 entry).
+Backend and web are complete. Mobile (`oglasino-expo`) is closed at **`mobile-stable`** (Igor 2026-06-01, on `new-expo-dev`): implemented and validated, with the iOS+Android rebuild carrying the V6/V9 conformance fixes + `@react-native-community/netinfo` landed. The 14-case on-device smoke ([image-pipeline-mobile-test-cases.md](image-pipeline-mobile-test-cases.md)) is **deferred, not skipped** — status was flipped on Igor's confirmation rather than on a completed device pass; any failures surfaced when the smoke is eventually run are ordinary follow-ups, not a re-opening of the feature. See the [decisions.md](../decisions.md) 2026-05-30 and 2026-06-01 (close) entries.
 
 As-built mobile implementation:
 

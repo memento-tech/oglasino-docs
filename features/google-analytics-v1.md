@@ -1,6 +1,6 @@
 # Google Analytics v1
 
-**Status:** `in-progress-web`
+**Status:** web `shipped`; mobile `mobile-stable` (see `state.md`)
 **Branch:** `dev`
 **Mastermind chat:** 2026-05-20
 **Spec authority:** this document. Any sibling-repo doc that disagrees defers to this file per conventions Part 1.
@@ -517,5 +517,69 @@ After stage is verified working end-to-end, repeat Steps 1-9 for a separate "Ogl
 
 | Platform | Status        | Notes                                                          |
 |----------|---------------|----------------------------------------------------------------|
-| Web      | `planned`     | This spec.                                                     |
-| Mobile   | `not-started` | Separate Mastermind chat. Mobile has its own analytics SDK story (`expo-firebase-analytics`, the `@react-native-firebase/analytics` package, or GA4-direct via measurement protocol) plus App Tracking Transparency on iOS. Not folded in here. |
+| Web      | `shipped`        | Shipped to dev; verified via DebugView 2026-05-23.            |
+| Mobile   | `mobile-stable`  | Shipped on `new-expo-dev` via `@react-native-firebase/analytics`; all 13 events verified on-device via Firebase DebugView on iOS + Android 2026-06-02. See Platform adoption — Mobile (Expo) below. |
+
+---
+
+## Platform adoption — Mobile (Expo)
+
+**Status:** `mobile-stable` — shipped on `new-expo-dev`; all 13 events verified on-device via Firebase DebugView on iOS + Android 2026-06-02 (with `page_view` confirmed firing and no parallel auto `screen_view`). See [decisions.md](../decisions.md) 2026-06-02.
+
+**Directive:** strict mirror of the web catalog in this spec. Same 13 events, same event names, same parameter keys, same PII rules. Mobile changes the plumbing, never the catalog. No mobile-only events in v1.
+
+### What mirrors web exactly (do not redesign)
+
+The 13-event catalog and every parameter spec above are authoritative for mobile. Mobile sends the **exact same event names and parameter keys** (`product_id`, `seller_id`, `user_id`, `is_owner_view`, `is_new_chat`, `block_count`, `has_text`, `has_images`, `image_count`, `results_count`, `filters_active`, `sort_order`, `search_term`, `error_code`, `form_name`, `page_path`, `error_name`, `error_message`, `boundary`, `method`) — no camelCase drift, no renames — so both platforms land in the same GA4 custom dimensions. Same `search_term` 100-char truncation. Same `exception` no-stack-trace rule. Same PII discipline: numeric IDs only; never name, email, phone, message body, or image URL/keys in a payload.
+
+### GA4 routing
+
+Mobile reports into the **same GA4 property as web, via a new mobile data stream** (not a separate property). One app+web property keeps the mirrored events in unified reports. Igor executes the admin-side stream creation.
+
+### Plumbing that differs from web (mobile-specific)
+
+- **SDK.** No `gtag.js` / `next/script`. Use `@react-native-firebase/analytics` + `@react-native-firebase/app` (new dependencies; require a native rebuild). Every event goes through one mobile `track(event, params)` wrapper over `logEvent` — no raw `logEvent` at call sites, mirroring web's single-entry-point discipline. The web guards collapse to mobile equivalents: not-initialized, consent-not-granted, SDK-absent.
+- **`page_view`, not `screen_view`.** Mobile fires a custom `page_view` (web's event name, for report parity) on route change via an expo-router `usePathname()` listener mounted **inside the navigation context** (a `_layout` under the portal `<Stack>`, not `AppInit` — `usePathname()` does not resolve outside the navigator). Payload `{ page_path }`. **Disable Firebase Analytics' automatic `screen_view` collection** at init so views are not double-counted.
+- **ATT (iOS).** Add `expo-tracking-transparency`; show the App Tracking Transparency prompt at launch **before** analytics SDK init. Apple rejects analytics SDKs without it.
+- **Consent + ATT gating.** Analytics init gates on `(ATT-allows-on-iOS, or Android) AND isAnalyticsConsentGranted()`. The gate (`src/lib/consent/analyticsGate.ts`) is already shipped (consent-mode-mobile). F is its first live caller. Subscribe to the consent store so toggling analytics off stops collection without an app restart.
+- **`user_id`.** Set via the Firebase Analytics `setUserId` equivalent once auth resolves; clear on sign-out. Mirrors web's `GA4UserIdSync`.
+- **Delete `src/lib/client/firebaseAnalytics.ts`.** Dead web-SDK vestige (`typeof window` guard, always `null` on device), zero importers. The F implementation deletes it.
+
+### Firing surfaces and the decisions that shaped them
+
+- **`page_view`** — expo-router `usePathname()` listener inside the navigator. Fires after boot (Stack mounts only at `bootStatus` `ready`/`updating`), so a missing pre-boot `user_id` is expected and allowed.
+- **`sign_up` / `login`** — fire from the **explicit auth methods** `login()` / `register()` / `loginWithGoogle()` in `src/lib/store/authStore.ts`. The `initAuthListener` `onIdTokenChanged` branch fires **nothing** — it is a token-rotation/cold-start-rehydration handler, and firing there would emit a spurious `login` on every app relaunch. `sign_up` vs `login` is discriminated by `wasRegister` (see below). `method` ∈ `email | google | facebook` is read from `firebaseUser.providerData[0].providerId`. Facebook is a dead stub today, so only `email` and `google` paths fire — correct; instrument what exists.
+- **`wasRegister` plumbing (required, mobile-side only, zero backend work).** The backend already returns `wasRegister: boolean` on the shared `/auth/firebase-sync` response, but the mobile `AuthUserDTO` type omits it and `syncUserToBackend` drops it. F adds `wasRegister: boolean` to the mobile `AuthUserDTO` type and surfaces it through `syncUserToBackend` to the explicit auth methods, which use it to pick `sign_up` vs `login`.
+- **`product_view`** — product detail screen (`app/(portal)/(public)/product/[...productData].tsx`), effect after the product + owner load. `is_owner_view` = `owner.iamActive`. Coerce `price` (typed `string` on the DTO) to a number; pass numeric `product_id` + category IDs, never the product name.
+- **`product_create_started`** — `AddUpdateProductDialog` first-step mount, **gated to the create instance only** (the dialog hard-codes `mode: 'create'` at `UploadedProductDialog.tsx`; F confirms create-only so it does not fire on edit).
+- **`product_create_completed`** — `UploadedProductDialog` success branch. Coerce `price` (string → number); read currency as the ISO code off the `CurrencyDTO` object (`.code`), not the object itself.
+- **`contact_seller_clicked`** — three call sites: `CallUserButton` (Call), `StartMessageButton` (Message), `FavoriteButton` (Favorite). `CallUserButton` needs `product_id` plumbed one hop from its parent `ProductFunctions.tsx` (same plumbing web needed); it carries `seller_id` (`userId`) but no product context. Never put the seller phone/name in the payload — `seller_id` numeric only.
+- **`message_sent`** — `useActiveChatStore.sendMessage`, after `batch.commit()` resolves. `receiver_id` = `receiver.id` (numeric), NOT `receiver.firebaseUid`. Payload carries only `is_new_chat`, `block_count`, `has_text`, `has_images`, `product_id` — never the message body text or image keys.
+- **`search`** — `SearchInput` commit (the "search for X" footer press). Tapping an autocomplete suggestion is a product navigation, not a search — does not fire `search`.
+- **`view_search_results`** — `FilteredProductList` on page-0 resolution when `searchText` is non-empty. `results_count` = `totalNumberOfProducts` from the response.
+- **`filter_change`** — a **debounced effect on `FilteredProductList.filtersData`, excluding `searchText`** (which belongs to `search`). Mobile keeps filters in Zustand with no URL-sync, so this memo is the single convergence point every mutation flows through. `filters_active` carries filter categories only, never values.
+- **`exception`** — neither an error boundary nor a global handler exists on mobile today; both are built by F (RN-specific — web's `error.tsx`/`global-error.tsx`/`window` listeners do not port): an expo-router `ErrorBoundary` export (`boundary: 'route'`) and `ErrorUtils.setGlobalHandler` + promise-rejection tracking (`boundary: 'global'`). Same payload as web (`error_name`, `error_message` truncated to 200, no stack trace).
+- **`form_submit_failed`** — two error shapes on mobile. Backend-validated forms (product create/update) expose the structured `{field, code, translationKey}` shape via `parseServiceError`; fire with the real Part-7 `code`. Register/login use imperative `validateForm` branches (no Zod on mobile), so F defines a **synthetic** `error_code` set from those branches (e.g. `EMAIL_EMPTY`, `EMAIL_FORMAT`, `PASSWORD_EMPTY`, `PASSWORD_TOO_SHORT`, `DISPLAY_NAME_EMPTY` — F enumerates the exact branches at build time).
+
+### Definition of done (mobile)
+
+- All 13 events fire from the surfaces above with web-identical names and parameter keys.
+- ATT prompt shown at launch; SDK init gated on ATT + `isAnalyticsConsentGranted()`.
+- `user_id` set on auth resolve, cleared on sign-out.
+- `wasRegister` threaded; `sign_up` vs `login` discriminates correctly across email and google.
+- Auto-`screen_view` disabled; `page_view` fires on route change.
+- `firebaseAnalytics.ts` deleted; `CallUserButton` carries `product_id`.
+- New mobile GA4 data stream in the web property; Igor verifies each event in Firebase DebugView on a real device.
+
+---
+
+## Session log
+
+### Mobile (Expo) — `new-expo-dev`
+
+- **2026-06-01 — `oglasino-expo-google-analytics-v1-1`** — read-only audit (produced `audit-google-analytics-v1.md`): current-state mapping of firing surfaces and the mobile SDK story.
+- **2026-06-01 — `oglasino-expo-google-analytics-v1-2`** — foundation + auth/page_view: `track`/`trackError` wrapper over `logEvent` with the three no-op guards, consent+ATT-gated init, `user_id` on auth resolve / cleared on sign-out, `page_view`, `sign_up`, `login`, `wasRegister` via a type-only `AuthUserDTO` change; deleted the dead `firebaseAnalytics.ts`.
+- **2026-06-01 — `oglasino-expo-google-analytics-v1-3`** — `exception` (RN-native route `ErrorBoundary` + `ErrorUtils` global handler + promise-rejection tracking) and `form_submit_failed` (real Part-7 codes on backend paths; synthetic codes on client-validated paths).
+- **2026-06-02 — `oglasino-expo-google-analytics-v1-4`** — the eight transactional events (`product_view`, `product_create_started`, `product_create_completed`, `contact_seller_clicked`, `message_sent`, `search`, `view_search_results`, `filter_change`). Corrects the gap a premature closure had assumed shipped; 395/395 tests green.
+- **2026-06-02 — `oglasino-expo-ios-firebase-nonmodular-fix-1`** — native toolchain fix unblocking the iOS build (`buildReactNativeFromSource: true`); not a feature event, but required to ship the SDK. See [decisions.md](../decisions.md) 2026-06-02.
+- **2026-06-02** — on-device Firebase DebugView smoke passed on iOS + Android; feature flipped to `mobile-stable`.

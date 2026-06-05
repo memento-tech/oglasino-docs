@@ -555,9 +555,11 @@ Estimated effort: 1 week (mostly audit).
 
 Web acquires users from search; apps retain them. The handoff between the two is deep linking. Without it, every search click lands on web and stays there, even when the user has the app installed.
 
+> **Superseded 2026-06-04 — now its own feature.** Universal/App Links shipped (code-complete) as [deep-linking.md](deep-linking.md) (router + expo), with decisions that override the sketch below: the two well-known files are **served directly by the router worker, not the web origin** (ownership shift web→router — see [decisions.md](../decisions.md) 2026-06-04), and the locale segment is **strict-validated and used to switch base-site + resolve filters**, not discarded. The bullets below are kept as the original SEO-context sketch; defer to `deep-linking.md` on any disagreement.
+
 Mechanism:
 
-- **Server emits two well-known files.** Web serves `/.well-known/apple-app-site-association` (no extension, `application/json` content-type) and `/.well-known/assetlinks.json`. Both map web URL patterns to app bundle/package identifiers. The router worker must not redirect or rewrite these paths.
+- **Server emits two well-known files.** The **router worker** serves `/.well-known/apple-app-site-association` (no extension, `application/json` content-type) and `/.well-known/assetlinks.json` directly, tier-correct per env. Both map web URL patterns to app bundle/package identifiers. (Originally sketched as web-served; moved to the router 2026-06-04 — see `deep-linking.md` §4.1.)
 - **iOS app registers Associated Domains** entitlement with `applinks:oglasino.com`. App-side handler routes incoming URLs to the matching screen in the app.
 - **Android app registers intent filters** with `autoVerify="true"` for `https://oglasino.com/*` patterns. Play Store verifies against `assetlinks.json` at install time.
 - **Web emits smart app banner metadata.** iOS Safari renders the `apple-itunes-app` meta tag automatically when present. Android's equivalent is a custom banner component on mobile-web pages.
@@ -566,9 +568,9 @@ Mechanism:
 
 Cross-repo work:
 
-- `oglasino-web` — serves `.well-known` files, renders smart app banner on mobile, adds `potentialAction` to JSON-LD, adds "Open in app" CTAs where appropriate.
-- `oglasino-expo` — registers Associated Domains (iOS) and intent filters (Android), implements URL → screen routing for product/user/catalog/home, handles cold-start vs warm-start deep links.
-- `oglasino-router` — exempts `/.well-known/*` paths from any rewriting or redirect logic; verify the noindex header on stage doesn't block these files (crawlers like Google Search need to fetch `assetlinks.json` during indexing for app-action eligibility).
+- `oglasino-web` — **deferred consumer surfaces only** (no longer serves the well-known files — that moved to the router): smart app banner on mobile, `potentialAction` on JSON-LD, "Open in app" CTAs. All deferred until the app is published (see `deep-linking.md` §5 and [issues.md](../issues.md) 2026-06-04).
+- `oglasino-expo` — registers Associated Domains (iOS) and intent filters (Android), implements URL → screen routing for product/user/catalog/home, handles cold-start vs warm-start deep links. **(Shipped — see `deep-linking.md` §4.2–4.4.)**
+- `oglasino-router` — **serves** `/.well-known/apple-app-site-association` and `/.well-known/assetlinks.json` directly (inline, `application/json`, 200, short-circuited before the maintenance gate / origin forward / KV reads), tier-correct per env. It no longer merely "stays out of the way" for these two files — web serves nothing under `/.well-known/` for them. Ownership of these two paths moved web→router on 2026-06-04 (see `deep-linking.md` §4.1 and [decisions.md](../decisions.md)). Any other `/.well-known/*` paths (none currently in use) remain origin-forwarded as before.
 - `oglasino-backend` — no changes required.
 
 Operator prerequisites: Apple Developer Team ID, app bundle identifier, Android package name and SHA-256 cert fingerprints (debug + release).

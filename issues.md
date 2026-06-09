@@ -4,6 +4,100 @@ Append-only log of out-of-scope findings. Newest at the top. Each entry has a da
 
 ---
 
+## 2026-06-06 — `ProductAudit` has no application writer
+
+**Repo:** `oglasino-backend` · **Severity:** medium · **Status:** open
+
+`entity/ProductAudit.java` `changed_at` is `NOT NULL`, but no code constructs the entity or
+calls `setChangedAt` — it is only ever deleted (`ProductAuditRepository.deleteByUserId`). A
+latent contract gap: a `NOT NULL` audit table that nothing populates. Its timestamp-zone
+question is therefore moot today.
+
+**Origin:** surfaced by the `timestamp-zone-utc` audit (Part 4b). Out of scope for that
+feature. Needs separate triage — is the audit-write path dead, or owed? See
+[features/timestamp-zone-utc.md](features/timestamp-zone-utc.md).
+
+---
+
+## 2026-06-06 — `BaseEntity` LocalDateTime timestamps are Belgrade wall-clock but four call sites interpret them as UTC
+
+**Repo:** `oglasino-backend` · **Severity:** medium · **Status:** fixed (2026-06-06)
+
+`BaseEntity.updatedAt`/`createdAt` are `@UpdateTimestamp`/`@CreationTimestamp`
+`LocalDateTime`, stored in `timestamp without time zone` columns. The production
+container runs `TZ=Europe/Belgrade` (Dockerfile), so Hibernate writes Belgrade
+wall-clock time. Four call sites interpret that stored value as UTC, making them off
+by the Belgrade offset (+01:00 winter / +02:00 summer):
+
+- `DocumentProductConverter` — `createdAt.toInstant(ZoneOffset.UTC)`
+- `ProductDetailsConverter` — `LocalDateTime.ofInstant(getCreatedAt(), ZoneOffset.UTC)`
+- `ProductIndexer` — `…withZone(ZoneOffset.UTC)`
+- `EmailDateFormatter` — `.withZone(ZoneOffset.UTC)`
+
+Effect: skewed Elasticsearch sort ordering, skewed displayed product dates, skewed
+email dates. Not a hard failure — a correctness/skew bug.
+
+**Important asymmetry (for whoever fixes this):** `admin-app-version-control`'s
+`AppVersionAdminDTO.updatedAt` was fixed (2026-06-06) to read this value
+**correctly** — it converts via `ZoneId.systemDefault()` to an explicit-zone `Instant`
+(emits trailing `Z`). So that one DTO is already right. Any system-wide fix must
+**not** double-correct `AppVersionAdminDTO`.
+
+**Fix options (decision deferred to a dedicated session — has a data-migration
+dimension, decide deliberately):**
+
+- **Option A — set container `TZ=Etc/UTC`:** makes `@UpdateTimestamp` write UTC, which
+  makes the four `ZoneOffset.UTC` sites correct as-is. BUT shifts the interpretation of
+  every already-stored timestamp by the offset → existing rows read back skewed unless
+  migrated. Pre-launch (minimal real data) this cost is near-zero and UTC is the
+  conventional choice; post-launch it's a migration. `AppVersionAdminDTO`'s
+  `systemDefault()` conversion stays correct (it'd then be UTC).
+- **Option B — standardize on Belgrade:** fix the four call sites to interpret as
+  Belgrade (e.g. `systemDefault()`) instead of UTC. Keeps stored data stable; changes
+  code instead.
+
+Recommendation noted at close: UTC (Option A) is likely right while pre-launch, but
+it's the fix session's call with the data picture in front of it.
+
+**Origin:** surfaced during the `admin-app-version-control` backend follow-up
+(2026-06-06) as a Part 4b adjacent observation; the `AppVersionAdminDTO.updatedAt`
+correctness fix is what exposed it. See
+[decisions.md](decisions.md) 2026-06-06 (`admin-app-version-control` close-out) and
+[features/admin-app-version-control.md](features/admin-app-version-control.md).
+
+**Resolution (2026-06-06):** resolved by **Option A** — container `TZ` flipped to
+`Etc/UTC` (`Dockerfile`), so the stored `LocalDateTime` now holds UTC wall-clock and
+`DocumentProductConverter:76`'s `toInstant(ZoneOffset.UTC)` is correct as-written. No data
+migration (pre-prod `V1` rebuild). **Audit correction:** only `DocumentProductConverter:76`
+was a genuine skew site (plus its display inverse `ProductDetailsConverter:78`);
+`EmailDateFormatter` and `ProductIndexer` operate on `Instant`s and were always immune — the
+title's "four call sites" overstated it (one genuine site). `AppVersionAdminDTO.updatedAt`
+stays correct (`systemDefault()`) and was **not** double-corrected. Stage boot spot-check
+passed 2026-06-06 (stamped product `created_at` confirmed UTC, not Belgrade), closing the
+verification gap. See
+[decisions.md](decisions.md) 2026-06-06 ("Timestamp Zone — UTC") and
+[features/timestamp-zone-utc.md](features/timestamp-zone-utc.md).
+
+---
+
+## 2026-06-06 — `allowNotifications` flag gates no push delivery (resolved-by-removal)
+
+**Repo:** oglasino-backend (dispatch) + oglasino-web (toggle) · **Severity:** medium · **Status:** fixed (2026-06-06 — notifications-toggle-removal shipped across all three repos; flag removed end-to-end, dispatch unchanged/still token-only)
+
+The account-wide `allowNotifications` flag gates nothing on the backend.
+`DefaultNotificationsService.fanOutPush` sends to every push token a user has and
+never reads the flag (audit 2026-06-06). The web settings toggle compounds this: it
+mutates BOTH the account-wide flag AND this one device's push token on save, so the
+two drift — turning the toggle OFF on one of two devices sets the account flag
+`false` while the other device keeps receiving push (its token is untouched), so a
+user who turned notifications "off" still gets them on their other device. The flag
+is decorative: persisted, read back to render the toggle, consumed by no delivery
+decision. Resolution chosen is removal, not a delivery-gate fix — legal adviser
+confirmed the toggle is not required (2026-06-06). See
+[decisions.md](decisions.md) 2026-06-06 and
+[features/notifications-toggle-removal.md](features/notifications-toggle-removal.md).
+Flip to `fixed` when the removal feature ships across all three repos.
+
 ## 2026-06-04 — Password (email/password) users are wrongly told to change their email "with their provider"; in-app email change is blocked for them
 
 **Repo:** `oglasino-backend` · **Severity:** medium · **Status:** fixed

@@ -19,7 +19,7 @@ We have tried to write these Terms in plain language. Where legal terms are nece
 
 ## 2. Who we are
 
-Oglasino is an online classifieds platform for buying, selling, and exchanging new and used goods. The platform operates in two country portals — Serbia (rs) and Montenegro (me) — and is accessible to visitors from other countries.
+Oglasino is an online classifieds platform for buying, selling, and exchanging new and used goods. The platform operates in two country portals — Serbia (rs) and Montenegro (me) — and is accessible to visitors from other countries. Oglasino is available as a website and as native mobile apps for iOS and Android; these Terms apply however you access it.
 
 Oglasino is operated by:
 
@@ -49,6 +49,8 @@ In practical terms, this means:
 
 If something goes wrong in a transaction between two users, the platform's role is limited to enforcing these Terms and the Privacy Policy. Disputes about the goods themselves, the price, delivery, or condition are between the buyer and the seller.
 
+**How you access Oglasino.** You can use Oglasino through our website and through our native mobile apps for iOS and Android. When you download or use a mobile app, you also agree to the rules of the app store you obtained it from (the Apple App Store or Google Play). Those app stores are not responsible for Oglasino, its content, or support for it; your agreement is with us, not with the app store. [LAWYER REVIEW: App-store distribution — add the licensed-application / EULA terms Apple and Google require developers to include before publication (for example, Apple's Licensed Application End User License Agreement terms, Apple as a third-party beneficiary entitled to enforce the agreement, and the allocation of support, warranty, and product-claims responsibility away from the app stores).]
+
 ---
 
 ## 4. Who can use Oglasino
@@ -64,6 +66,8 @@ If something goes wrong in a transaction between two users, the platform's role 
 ## 5. Your account
 
 **Registration.** You can register with an email address and password, or by signing in with a Google account. Authentication is handled by Firebase Authentication (see the Privacy Policy for details).
+
+**Email verification.** If you register with an email address and password, you must verify your email before you can use your account. Until your email is verified, you will not be able to stay signed in. Accounts created through Google sign-in are verified through Google.
 
 **Accuracy.** When you create an account, the information you provide must be accurate. You agree to keep your account information up to date.
 
@@ -202,9 +206,9 @@ Reviews are a core part of how trust works on Oglasino. The Privacy Policy descr
 
 ## 9. Reports and moderation
 
-If you see content or conduct that violates these Terms, you can report it. To submit a report, use the in-app reporting feature on the relevant listing, profile, or conversation.
+If you see content or conduct that violates these Terms, you can report it. To submit a report, use the in-app reporting feature on the relevant listing, profile, review, or conversation.
 
-- Reports can be filed about a user or a listing.
+- Reports can be filed about a user, a listing, or a review.
 - Each report includes a category (fraud, poor service, rules violation, violence or harassment, inappropriate content, misleading or fake listing, portal rules violation, technical issue, or other) and a description.
 - We review reports manually. In the future we expect to automate parts of report handling for routine cases; you will see no change in the reporting experience.
 - We do not promise to act on every report, and we do not promise a specific response time. We do promise to take credible reports seriously.

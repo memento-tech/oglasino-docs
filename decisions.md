@@ -6,6 +6,184 @@ Format: each decision has a date, a one-line summary, the reasoning, and the alt
 
 ---
 
+## 2026-06-09 — Correction: mobile GA4 init is consent-only, not ATT-gated
+
+The 2026-06-02 "GA4 mobile v1 shipped" entry describes the mobile analytics init
+as "consent+ATT-gated." That phrasing is stale. App Tracking Transparency was
+removed (issues.md 2026-06-02, iOS ATT-crash fix): Oglasino does not use ATT, does
+not collect an advertising identifier (IDFA), and does not track across apps. The
+mobile analytics init gate is consent-only — `isAnalyticsConsentGranted()`, with the
+`attAllowed` operand removed. This matches the privacy-policy draft (§2.16, §7), which
+states the app does not use App Tracking Transparency. No code change — the code already
+removed the ATT call; this corrects the decisions.md description to match.
+
+## 2026-06-06 — Timestamp Zone — UTC: container TZ flipped to `Etc/UTC`
+
+**Feature:** [features/timestamp-zone-utc.md](features/timestamp-zone-utc.md). Shipped
+(code) on backend `dev` 2026-06-06; `verifying` pending Igor's stage boot spot-check.
+
+**The problem.** `BaseEntity.createdAt`/`updatedAt` are `@CreationTimestamp`/
+`@UpdateTimestamp` `LocalDateTime`, stored in `timestamp without time zone` columns. The
+container ran `TZ=Europe/Belgrade` (`Dockerfile`), so Hibernate wrote Belgrade wall-clock,
+and one reader (`DocumentProductConverter:76`, `toInstant(ZoneOffset.UTC)`) re-labelled that
+value as UTC — producing an Elasticsearch `Instant` skewed by the Belgrade offset
+(+1h winter / +2h summer), with a paired display inverse at `ProductDetailsConverter:78`.
+
+**The fix — Option A.** A single `Dockerfile` ENV flip, `TZ=Europe/Belgrade` → `Etc/UTC`.
+No `hibernate.jdbc.time_zone` was pinned anywhere (audit-confirmed), so the flip alone makes
+`@CreationTimestamp`/`@UpdateTimestamp` write UTC wall-clock; the two UTC-reading sites become
+correct as-written. **No reader code changed.** Pre-production (schema rebuilds from `V1` on
+every reset, no stored rows), so the re-base is migration-free. Backend flip + own-repo
+doc-sync landed 2026-06-06, `spotless` clean, 969 tests green.
+
+**Corrected blast radius.** Exactly **one** genuine skew site — `DocumentProductConverter:76`
+(ES `Instant`) plus its display inverse `ProductDetailsConverter:78`. `EmailDateFormatter` and
+`ProductIndexer` operate on `Instant`s, not `BaseEntity` `LocalDateTime`s, and were always
+flip-immune — the [issues.md](issues.md) 2026-06-06 entry's "four call sites" framing was
+wrong (the "skewed email dates" symptom never existed). `AppVersionAdminDTO.updatedAt`
+converts via `ZoneId.systemDefault()` (`DefaultAppVersionService:99`) and is correct under any
+container zone — it was **not** double-corrected; left alone.
+
+**Accepted cron-timing shift.** No `@Scheduled` cron sets a `zone=`, so each wall-clock
+expression is now interpreted as UTC. Operator-accepted (no zone pinning). The deletion
+reminder moves to 13:00 UTC = 15:00 Belgrade summer / 14:00 winter; the other eight crons
+shift likewise. No cron's correctness depends on zone — each recomputes its cutoffs from
+`Instant.now()`.
+
+**Alternatives considered.** **Option B — fix the four readers to `systemDefault()`** instead
+of flipping the container — rejected. Clean-hands pre-prod made the TZ flip the durable
+root-cause fix; B would bake Belgrade into the data's semantics and re-arm the `ZoneOffset.UTC`
+trap for any future reader, leaving the underlying mismatch in place.
+
+## 2026-06-06 — notifications-toggle-removal shipped (close-out)
+
+The toggle + `allowNotifications` flag removal (decision earlier this date) is
+code-complete across backend, web, and mobile — all staged, all DoD-green, all
+grep-zero. The flag no longer exists in any repo. Final shape matches the spec
+exactly: no dispatch gate added (delivery was and remains token-only), web/mobile
+push registration on the auth/boot path untouched, OS/browser permission is the
+off-switch, logout detaches the device token.
+
+**Two audit-completeness gaps surfaced during execution** (both caught by the
+grep-zero DoD, neither shipped a defect): (1) the backend Phase-2 audit enumerated
+the `testUsers.json` _consumer_ (`ImportUserData` + `TestUsersImportService`) but
+not the JSON _source file_ — the backend engineer folded in the 3-entry removal;
+(2) the web audit did not surface that the COOKIES seed keys
+`notifications.label`/`.description`/`.warning` would be orphaned by the removal.
+Lesson for future audits: enumerate fixture/seed _source files_, not just their
+consumers. Logged for the audit-discipline track.
+
+**Now-dead seed keys deleted directly.** The three COOKIES seed keys
+(`notifications.label`/`.description`/`.warning`) were dead across both clients
+(web + mobile grep-zero). Because the Ω teardown pass had already run before this
+feature, they were deleted directly from the backend seed rather than parked for Ω:
+12 rows (3 keys × 4 locales EN/RS/CNR/RU) removed from
+`src/main/resources/data/translations/0001-data-web-translations-*.sql`, 969 tests
+green against the fresh seed, zero code references. The live BUTTONS key
+`button.notifications.label` (mobile BottomBar) was left untouched — different
+namespace. Disposable-ID gaps left in the COOKIES sequence per convention, no renumber.
+
+## 2026-06-06 — Admin App Version Control: backend + web feature for the per-platform update floor
+
+**Feature:** an admin-panel view to set the mobile app-update **floor**
+(`minSupportedVersion`) per platform — the value the existing version gate uses to
+force a hard-update. Styled like `/admin/cache`. See
+[features/admin-app-version-control.md](features/admin-app-version-control.md).
+
+1. **Backend + web, not web-only.** The floor had no admin-reachable write path: it was
+   writable only via the M2M `POST /internal/app/version/floor` (guarded by
+   `X-INTERNAL-TOKEN`), which the Firebase-Bearer web admin client cannot reach. A new
+   admin-gated endpoint was required, so this is a backend feature as much as a web one.
+2. **New admin surface.** `GET /api/secure/admin/app/version` (both platforms:
+   `platform`, `latestVersion`, `minSupportedVersion`, `updatedAt`) +
+   `POST /api/secure/admin/app/version/floor`, on a controller with class-level
+   `@PreAuthorize("hasRole('ADMIN')")`, mirroring `CacheAdminController` /
+   `MaintenanceAdminController`. Admin identity is derived server-side from
+   `SecurityContextHolder` (Part 11) — never a client-supplied role/flag.
+3. **Floor > ceiling rejected server-side** (coded `422 APP_VERSION_FLOOR_ABOVE_CEILING`)
+   — a floor above the ceiling would force users to a version that does not exist yet
+   (total lockout). Plus strict 3-part-semver validation (coded
+   `422 APP_VERSION_FLOOR_INVALID_SEMVER`). Both live in a new `AppVersionService`; the
+   existing `/internal` write paths were left **byte-identical** (the EAS ceiling hook
+   depends on them).
+4. **No actor / "who-set-it" column.** Single-operator system; `updatedAt` provides the
+   "when" provenance. "In case we need it" rejected (Part 4a). Revisit if a second admin
+   appears.
+5. **EAS-integration rejected for v1.** The view drives off the two live backend values;
+   `latestVersion` already flows in via the EAS post-build hook; no version-history table
+   exists so a picker isn't backable. No live EAS call. Revisit on real demand.
+6. **Web view mirrors `/admin/cache`.** A "Require latest version" button (fills the
+   floor field with the current `latestVersion` — the safe 99% path, can't typo a
+   lockout) + a manual semver escape-hatch field + Save behind a consequence-naming
+   confirm dialog. The floor input is button-or-type, not a picker (no history to pick
+   from).
+7. **Dedicated `AppVersionValidationException` + handler** (mirroring the Report domain)
+   rather than reusing the generic `ProductValidationException` — the reuse was
+   semantically wrong (an app-version write throwing a product exception). Mastermind
+   override of the implementer's initial reuse.
+8. **`updatedAt` wire format pinned.** `AppVersionAdminDTO.updatedAt` changed
+   `LocalDateTime` → `Instant`, emitting an explicit-zone (trailing `Z`) value via
+   `ZoneId.systemDefault()` conversion, plus a serialization test — so the web
+   provenance display can't be silently broken by a global Jackson change and the web
+   client needn't assume a zone. This fix is what surfaced the separate, feature-
+   independent timestamp-zone bug now logged in [issues.md](issues.md) 2026-06-06
+   (`BaseEntity` LocalDateTime timestamps interpreted as UTC). Any system-wide timestamp
+   fix must not double-correct this DTO — it is already right.
+
+**Mobile:** untouched. `oglasino-expo` already reads the version gate and obeys the
+backend-computed booleans; no adoption expected.
+
+**Rejected:** web-only scoping (the floor had no admin-reachable write path — #1);
+reusing the internal floor endpoint from web (unreachable by the Firebase-Bearer client,
+and it does zero validation — #2/#3); an actor/audit column "in case we need it" (#4);
+EAS live-integration / a historical version picker for v1 (not backable, not needed —
+#5); reusing `ProductValidationException` for app-version writes (semantically wrong —
+#7); leaving `updatedAt` as a zoneless `LocalDateTime` (forces the web client to assume
+a zone — #8).
+
+## 2026-06-06 — "Allow notifications" toggle removed; OS/browser permission is the off-switch
+
+The user-settings "Allow notifications" toggle is removed from both clients and the
+account-wide `allowNotifications` flag is removed end-to-end (entity, V1 column,
+`UpdateUserDTO`, `AuthUserDTO`, `ImportUserData`, the four converters/readers, the
+three admin seeds). Legal adviser confirmed (2026-06-06) the toggle is not legally
+required. Spec at [features/notifications-toggle-removal.md](features/notifications-toggle-removal.md).
+
+**Why remove rather than fix.** The flag gated nothing. Three read-only audits
+(2026-06-06) confirmed: backend `fanOutPush` (`DefaultNotificationsService`) sends to
+every token that exists and never reads the flag; web reads it only to render the
+toggle; mobile never reads it (its toggle was already dead per the 2026-05-30
+consent-mode-mobile decision). The toggle also drove two divergent half-built models
+at once — an account-wide column AND a per-device token attach/detach — so flipping it
+on one of two devices left the account-wide flag `false` while the other device kept
+receiving push. Fixing required picking account-wide-vs-per-device and reconciling
+three repos; removing was less work and deletes the drift permanently.
+
+**The off-switch model after removal.** OS (mobile) / browser (web) notification
+permission is the user's opt-out; logout detaches the device token. There is no
+server-stored preference flag and no durable in-app "logged-in-and-silent" state on
+web (web auto-registers at boot when permission is `granted`, so a stale in-app
+"off" would re-register on next login — permission is the single source of truth).
+
+**Registration unchanged — this is a deletion, not a relocation.** The audit's
+load-bearing question was whether the toggle was the only path attaching a web push
+token. It is not: web attaches on the auth/boot path
+(`UseTokenRefresh.tsx:103` → `initPushForAuthenticatedUser`, on every
+sign-in/token rotation), mirroring mobile's `PushNotificationsInit`. The toggle was a
+redundant second trigger. Permission-prompt timing is also unchanged — the prompt
+fires on the boot path for a `default`-permission user, never driven by the toggle.
+
+**No ordering gate.** Both client DTO fields are optional (`?:`), so the field-absent
+payload and the client read-removals are order-independent. Recommended order
+backend → web → mobile → docs is for cleanliness, not correctness.
+
+**Rejected:** fixing the flag as an account-wide master switch (gate dispatch on it) —
+more work across three repos for a control legal says isn't required; per-device
+subscription model (drop the column, keep per-device tokens) — closer to the shipped
+dispatch but leaves a per-device toggle most users misread as account-wide; UI-only
+removal leaving the column and detach plumbing in place — leaves a dead column and an
+orphaned detach path for the next reader to puzzle over.
+
 ## 2026-06-04 — Deep Linking (Universal/App Links): product & architecture decisions
 
 **Feature:** shareable `https://oglasino.com/...` links open the mobile app (iOS Universal Links / Android App Links). Custom-scheme `oglasino://` links already worked; this adds the verified-https kind. Spans `oglasino-router`, `oglasino-expo` (backend N/A, web deferred). See [features/deep-linking.md](features/deep-linking.md).
@@ -84,7 +262,7 @@ The `InputSanitizationFilter`/`Sanitizer.sanitize` HTML-entity-encoding at the i
 
 - **Web owns the entire reset flow; both platforms funnel to web.** `/forgot-password` (request entry) and `/reset` (oobCode confirm). Password change is pure client-side Firebase (`confirmPasswordReset`); the backend never sees the password and there is **no schema change**.
 - **Branded email via Admin SDK `generatePasswordResetLink` → Brevo** (oobCode extract-and-rewrite to `<webBase>/<locale>/reset`), reusing the email-notifications building blocks. The request endpoint `POST /api/auth/request-password-reset` is a sibling of `/auth/resend-verification`: unauthenticated, email-only, 60s + 4/day per-email Redis throttle on **separate keys**, no account-existence leak, coded responses.
-- **Provider gate:** send the reset link **iff the account's linked providers contain `password`**. The Firebase project is confirmed set to **"Link accounts that use the same email"** (one user per email; providers linkable), so the rule is *contains-password*, not *is-social*. Provider detected via Admin SDK `getUserByEmail().getProviderData()` — **not** the garbage `registeredWithProvider` column.
+- **Provider gate:** send the reset link **iff the account's linked providers contain `password`**. The Firebase project is confirmed set to **"Link accounts that use the same email"** (one user per email; providers linkable), so the rule is _contains-password_, not _is-social_. Provider detected via Admin SDK `getUserByEmail().getProviderData()` — **not** the garbage `registeredWithProvider` column.
 - **"Option 4" (login-screen "this account uses Google" hint) is DROPPED.** Rationale: Firebase email-enumeration protection (on) makes a social-account email+password failure return the generic `auth/invalid-credential`, indistinguishable from a wrong password client-side; `fetchSignInMethodsForEmail` is neutered. The only client-side detections were (a) a backend login pre-check (a new enumeration oracle + latency) or (b) disabling enumeration protection (reopens the existence leak) — both rejected. All provider help moves to the **email channel**: a social-only account that requests a reset receives a branded "use your social sign-in" email instead of a reset link.
 - **No leak, no lie:** the endpoint returns an identical generic response and consumes limits identically across all four states (banned / unknown / social-only / has-password). Every **real** account receives an email (reset link or "use social"); only a **non-existent** email receives nothing. On-screen copy is conditional: "If an account exists for this email, you'll receive an email shortly." **Banned** emails receive no reset link and no email (a banned user must not reset back in; ban comms are owned by the reblock flow).
 - **Success-step app-deep-link is SCAFFOLDED but DEFERRED** to a later session (inbound browser→app handling does not exist in the app today). The web success page wires a dormant, TODO'd "Open in app" affordance with a single-constant scheme target so the later session drops in; the live behavior is the web "log in here" fallback.
@@ -142,7 +320,7 @@ decisions" section):
 
 7. **Filter placement via the Security chain.** No filter declares `@Order`; only the Security chain
    trio is deterministic. Registered via `SecurityConfig.addFilterAfter(requestThrottleFilter,
-   RateLimitFilter.class)`, mirroring how `RateLimitFilter` itself is placed — sidesteps the
+RateLimitFilter.class)`, mirroring how `RateLimitFilter` itself is placed — sidesteps the
    undefined `@Component` ordering bucket rather than depending on it.
 
 8. **Auto-trip asserts maintenance-on (no-op if already on), writes BOTH web+backend flags, on a
@@ -452,6 +630,7 @@ and `getActiveFilterCount` sums `regions.length + cities.length`, so a collapsed
 matching web.
 
 **Three Finding-4 items closed with NO code work — including one retracted false alarm.**
+
 - **Price bounds:** `priceRange.from/to` are `BigDecimal`; Jackson's default scalar coercion
   turns the JSON string `"1000"` into `BigDecimal` identically to the number `1000`, so mobile's
   digit-string price bounds filter correctly. The "parse to number" change I would have applied
@@ -511,6 +690,7 @@ Igor's confirmed call.
 **Process note — implementation ran before the spec existed.** Session `-2` implemented off the chat transcript before the Phase 4 spec was authored, and a mid-session brief-file swap (an unrelated bug-batch brief overwrote `.agent/brief.md`) caused a stray `ProductUserDetails.tsx` edit that was reverted clean. The spec was authored at close, against the as-built code. The invented-keys error traces to the implementation outrunning the spec; it was caught and corrected.
 
 **Alternatives considered and rejected:**
+
 - Per-segment label translation keys (the invented `-2` approach) — rejected; web has none, parity requires none, and they manufactured a phantom cross-repo backend dependency.
 - NativeWind's native `colorScheme.set('system')` (NativeWind supports `'system'`) — rejected per the invariant; the store owns system resolution so `NAV_THEME` and every binary ternary only ever see a resolved value.
 - Generic `userPreferenceStorage` as the persistence host — rejected for a dedicated `themeStorage.ts` matching the per-concern house style; `userPreferenceStorage` is a zero-caller wrapper the codebase doesn't use as the pattern.
@@ -547,6 +727,7 @@ Chat I opened against the §I scope but a fresh Phase-2 audit on `new-expo-dev` 
 Chat H (mobile image-pipeline polish) closed. The image-pipeline core was already implemented and validated on `new-expo-dev` (see the 2026-05-30 entry); H was the final polish pass — strings, dead code, a progress-text touch-up, and one decision. Mobile status flips to `adopted`; `mobile-stable` follows on-device smoke (Ψ).
 
 **What shipped (all on `new-expo-dev`):**
+
 - **Progress text** wired into the product upload dialog (`UploadedProductDialog`) — it now subscribes to the shared `useUploadProgressStore` and renders per-stage status via the existing `stageLabel` helper (INPUT namespace, already-seeded `image.processing.*` keys). Previously a bare spinner. Session `oglasino-expo-image-pipeline-5`.
 - **B15 — three hardcoded Serbian strings** in `ImageSourceSheet.tsx` (a live sheet, reachable from product create/edit + review) moved to translation keys. Backend seeded `image.source.title` (DIALOG), `image.source.camera` / `image.source.gallery` (BUTTONS) ×4 locales — EN+RS final, RU+CNR placeholder (native review owed, Risk Watch). Mobile swapped the three inline strings. The spec's original "B15 = two strings in two files" framing was wrong: the second file (`ProductReviewImageImport.tsx`) was dead and was deleted, not translated.
 - **Dead code removed:** `ProductReviewImageImport.tsx` (zero importers; live review path is `ImagesImport`) and `app/__smoke__/upload.tsx` (self-marked smoke harness, prod-reachable expo-router route) deleted; comment references cleaned.
@@ -555,6 +736,7 @@ Chat H (mobile image-pipeline polish) closed. The image-pipeline core was alread
 **The one decision — AppState cleanup: rely on the sweeper, don't add teardown.** Recorded in full in the 2026-05-31 AppState entry below. Grounded in a web reference audit showing web has zero abandonment-time cleanup and leans on the same backend sweeper; both platforms upload late, so mobile is not more exposed than web.
 
 **Three scope items dropped after Phase 2 re-confirmation against `new-expo-dev` (not fixed, because not problems):**
+
 - Stale DTO fields (`oldName`/`oldDescription`/`productState`/`moderationState`) — already removed by chat A's `toUpdateWirePayload` allow-list; backend DTO confirmed clean too.
 - Dead `productUpdateNameValidator.ts` — does not exist; zero references.
 - Review-upload scope — not a bug; reviews upload `scope="product"` (the `ImageScope` type doesn't even contain `review`).
@@ -574,13 +756,16 @@ Chat H closed the open AppState question for the mobile image pipeline: **do not
 **The question.** When a user uploads product images and abandons the flow before the product is created, the already-uploaded R2 bytes become orphans (uploaded to storage, referenced by no entity). Should mobile add lifecycle code to cancel/clean up on backgrounding, or rely on the backend sweeper?
 
 **Decision: rely on the sweeper.** Reasons:
-- **Web does exactly this.** A read-only web audit (2026-05-31) found web has zero abandonment-time cleanup — no `beforeunload`/`pagehide`/`visibilitychange` handler, no unmount cleanup, no cancel-handler delete, no AbortController wired into the create flow. Web's own code comments say the backend sweeper reclaims orphans. Adding AppState teardown to mobile would make mobile *more* defensive than the reference platform, for a problem web doesn't solve client-side.
+
+- **Web does exactly this.** A read-only web audit (2026-05-31) found web has zero abandonment-time cleanup — no `beforeunload`/`pagehide`/`visibilitychange` handler, no unmount cleanup, no cancel-handler delete, no AbortController wired into the create flow. Web's own code comments say the backend sweeper reclaims orphans. Adding AppState teardown to mobile would make mobile _more_ defensive than the reference platform, for a problem web doesn't solve client-side.
 - **Both platforms upload late.** Mobile uploads bytes only at the final create step (`UploadedProductDialog` mount, expo audit item 8), exactly like web (Step-4 `UploadedProductDialog`). So mobile's orphan window is the same shape as web's — narrow, and only between the R2 PUT landing and the create POST resolving. Mobile is not more exposed than web.
 - **The sweeper is real and runs in prod.** `ProductImagesRemovalJob` (backend audit) sweeps `public/products/` + `public/profiles/` with a 24h grace, `enabled=true` in prod. It is the architecture's chosen backstop.
 
 **Cost of the decision:** orphaned R2 bytes linger up to ~24h before the sweeper reclaims them. Pre-launch, no scale concern. The alternative (AppState teardown) is net-new RN lifecycle code running on every backgrounding event — a new failure surface to close a window the sweeper already covers.
 
 **Note on sweeper timing:** the sweeper fires at 03:00 **Europe/Belgrade** (the container's `TZ`), not 03:00 UTC — the "03:00 UTC" wording in the spec and code javadocs is inaccurate for this deployment. The 24h grace window is the figure that matters and it is correct; the wall-clock time is not load-bearing for this decision.
+
+> **Amendment 2026-06-06 (timestamp-zone-utc):** this note's premise is now inverted. The container `TZ` was flipped `Europe/Belgrade` → `Etc/UTC` (`Dockerfile`), so the sweeper now fires at 03:00 **UTC** and the "03:00 UTC" wording in the spec and code javadocs is **accurate** as of this date. The 24h-grace point above stands unchanged; only the wall-clock-zone observation is superseded. See the 2026-06-06 "Timestamp Zone — UTC" entry at top and [features/timestamp-zone-utc.md](features/timestamp-zone-utc.md).
 
 **Considered and rejected:** AppState teardown — earns its complexity only if abandoned-upload orphans were a measured problem, which they are not pre-launch; the sweeper is the defense-in-depth the architecture already chose, and web confirms it is the platform's pattern.
 
@@ -590,6 +775,7 @@ Chat H closed the open AppState question for the mobile image pipeline: **do not
 
 Adopted web/backend filtering & search behavior on mobile via code review (on-device Ψ
 pass still pending). Shipped:
+
 - B5 — replaced RN-invalid `<div>` with `<View>`/`<Text>` in the filter fall-through
   (two sites).
 - B6 + structural — `clearAllFilters` now resets the product/moderation state arrays;
@@ -610,6 +796,7 @@ pass still pending). Shipped:
   `console.error` calls to `logServiceError`.
 
 Decisions:
+
 - **B9 dropped.** State-filter option labels render raw enum strings (ACTIVE/INACTIVE).
   This matches web (web also renders raw enums; backend has no per-value translation
   keys), so raw labels are parity, not a gap. No backend seed brief. A future i18n pass
@@ -672,7 +859,7 @@ recommendation; see state.md.
 
 The merged C+G Mastermind chat authored [`features/consent-mode-mobile.md`](features/consent-mode-mobile.md) (Phase 4) behind three read-only audits. Spec status is `not-started` — Phase 5 engineering briefs come next. The decisions below are the ones not obvious from the spec body.
 
-**Model: single-axis, two-state analytics consent.** Mobile's consent is one signal (`analytics: boolean`) plus a `decidedAt` sentinel and a `version`, stored device-local in AsyncStorage via a per-concern `consentStorage` module + a reactive `useConsentStore` (the confirmed mobile house style — `authStorage`/`softUpdateDismissal`, not the zero-caller `userPreferenceStorage` wrapper). It exposes one imperative, synchronous, default-deny gate `isAnalyticsConsentGranted()`. **Rejected** the web four-signal Consent Mode model (no cookies, no SSR `<head>` snippet, no Google Consent Mode on a phone) and ATT-only gating (leaves EU Android ungated). The subtle point: web applies its imperative `if (granted)` gate to *cookie persistence* and delegates analytics to Google *declaratively*; mobile has no declarative path, so it applies the same imperative gating *shape* to **analytics-SDK init** — the opposite axis from where web applies it. Mobile mirrors web's pattern, not its target. Mobile's other AsyncStorage data (base-site, language, theme, card-size, auth, push timing, translation cache) is "strictly necessary"/"functional" and needs no gate; disclosure of it is a privacy-policy concern, separate from consent.
+**Model: single-axis, two-state analytics consent.** Mobile's consent is one signal (`analytics: boolean`) plus a `decidedAt` sentinel and a `version`, stored device-local in AsyncStorage via a per-concern `consentStorage` module + a reactive `useConsentStore` (the confirmed mobile house style — `authStorage`/`softUpdateDismissal`, not the zero-caller `userPreferenceStorage` wrapper). It exposes one imperative, synchronous, default-deny gate `isAnalyticsConsentGranted()`. **Rejected** the web four-signal Consent Mode model (no cookies, no SSR `<head>` snippet, no Google Consent Mode on a phone) and ATT-only gating (leaves EU Android ungated). The subtle point: web applies its imperative `if (granted)` gate to _cookie persistence_ and delegates analytics to Google _declaratively_; mobile has no declarative path, so it applies the same imperative gating _shape_ to **analytics-SDK init** — the opposite axis from where web applies it. Mobile mirrors web's pattern, not its target. Mobile's other AsyncStorage data (base-site, language, theme, card-size, auth, push timing, translation cache) is "strictly necessary"/"functional" and needs no gate; disclosure of it is a privacy-policy concern, separate from consent.
 
 **F-facing contract.** G owns the consent decision (storage + store + gate) and the consent UI (first-run prompt + settings toggle). F (mobile analytics) owns the analytics SDK install/init and the iOS App Tracking Transparency prompt. ATT is Apple's IDFA gate, **not** GDPR analytics consent — F's init gates on **both**: `(ATT-allows-on-iOS, or Android) AND isAnalyticsConsentGranted()`. F subscribes to the reactive store so toggling analytics off stops collection without an app restart. G installs no SDK, touches no ATT, and does not wire the dead `firebaseAnalytics.ts` (F replaces it with a native init).
 
@@ -693,9 +880,9 @@ The `oglasino-expo` product create/edit/validation surface was rebuilt onto the 
 **Six banked decisions:**
 
 - **Rebuild onto the frozen contract** (above). The three endpoints are reused as-is, no mobile-specific routes; mobile adoption was frontend-only RN work.
-- **MIME-undefined-passes (RN translation).** The client flags `product.image.invalid_type` only for a *present* non-allowlisted MIME type; an *absent* `mimeType` passes through to the server boundary. RN's picker `mimeType` is optional/inconsistent on iOS (web validates the browser's reliable `File.type`), so a strict "absent == reject" would block legitimate iOS uploads. The server is the real content-type boundary. This is a correct RN translation of web's behavior, not a deviation.
+- **MIME-undefined-passes (RN translation).** The client flags `product.image.invalid_type` only for a _present_ non-allowlisted MIME type; an _absent_ `mimeType` passes through to the server boundary. RN's picker `mimeType` is optional/inconsistent on iOS (web validates the browser's reliable `File.type`), so a strict "absent == reject" would block legitimate iOS uploads. The server is the real content-type boundary. This is a correct RN translation of web's behavior, not a deviation.
 - **`__system` handling (option A).** Mobile's `parseServiceError` excludes `field: null` from `byField` (differs from web, which collapses such errors to `byField['__system']`). Mobile reads the object-level / rate-limit entry by scanning `errors` for `field === null` via the shared `findSystemError`, leaving `parseServiceError` unchanged (it is shared with `ReportDialog`). Step-routing consumes `byField` keys, so a system-only failure routes to the fallback step 3 — web-identical behavior with no shared-helper change.
-- **System/user translation keys.** Mobile renders the `translationKey` the backend *sends* (post-error-code-split: `system.*`, `user.*`); it never hardcodes a system/user key. The only client-constructed keys are `product.<field>.*`. The live rate-limit key is `system.rate_limited`.
+- **System/user translation keys.** Mobile renders the `translationKey` the backend _sends_ (post-error-code-split: `system.*`, `user.*`); it never hardcodes a system/user key. The only client-constructed keys are `product.<field>.*`. The live rate-limit key is `system.rate_limited`.
 - **Create-success UX (RN translation of web).** In-app navigation on "View link" plus `triggerDashboardReload` (a Zustand nonce remount) is the RN equivalent of web's `window.open(_blank)` + `window.location.reload()`. Web's `onFinish` hook is dead (no caller) and was removed on mobile.
 - **Product URL standardized (banked direction).** The mobile product URL is to be aligned to web's canonical `https://oglasino.com/{locale}/product/{id}/{slug}` (no `www`), via the URL-parity brief — fixing the prior `www.oglasino.rs` (`getNormalizedProductUrl`) / `www.oglasino.com` (`ShareProductButton`) / raw-slug divergence and adding the locale segment. The mobile delta audit (`oglasino-expo-product-validation-8`) surfaced this divergence as an open parity gap; the standardization is banked here as Igor's decision. **Landed-in-code status not verifiable from the archived artifacts** — no discrete URL-parity session summary was present in `oglasino-expo/.agent/` to archive, and the latest summaries (A5 / delta audit) still show the divergent base URLs. Reconcile against the actual `new-expo-dev` code in the post-smoke pass.
 
@@ -922,7 +1109,7 @@ The `/seen` endpoint's increment was gated by a token-bucket rate limiter (capac
 
 ## 2026-05-28 — Barrier-review lesson: verify the invariant on every resolve path, not just that resolution occurs
 
-When reviewing a gating/barrier mechanism, verify that every resolve path establishes the gate's actual invariant, not merely that resolution always occurs. Brief 14 shipped a barrier that resolved on terminal *status* (`ready`/`maintenance`/`select-base-site`); the `select-base-site` path reached a terminal status without setting codes, so the barrier released requests with null headers. Brief 15 corrected the invariant to "codes are set." Future barrier reviews must check invariant coverage per path.
+When reviewing a gating/barrier mechanism, verify that every resolve path establishes the gate's actual invariant, not merely that resolution always occurs. Brief 14 shipped a barrier that resolved on terminal _status_ (`ready`/`maintenance`/`select-base-site`); the `select-base-site` path reached a terminal status without setting codes, so the barrier released requests with null headers. Brief 15 corrected the invariant to "codes are set." Future barrier reviews must check invariant coverage per path.
 
 ---
 
@@ -941,6 +1128,7 @@ Reversed part of the 2026-05-14 web session 4 removal of `ensureSystemErrorKey`.
 **Why narrowly scoped.** The web session 4 rationale (trust the contract, don't paper over backend bugs) still holds for 400/422/403/500 — those statuses can mean many things and a synth would hide real bugs. 429 carries a single semantic. The synth is 429-only by code: the helper checks `status !== 429` and returns the parsed result unchanged. A `// NOTE:` block on the helper documents the scope and the edge-worker rationale so a future reader reads it as a deliberate, scoped guard rather than blanket defensiveness.
 
 **Alternatives considered and rejected:**
+
 - **Backend-only fix.** Rejected — the contract-emitting backend is already well-formed via `RateLimitFilter`; the gap is at the Cloudflare edge worker, which is a separate repo and a separate trust boundary. A client-side 429 guard is the right place to absorb edge-boundary shape drift.
 - **Reintroduce the synth in `parseProductValidationErrors` itself, parameterized by status.** Rejected — the shared parser stays strict per the 2026-05-14 web session 4 contract-discipline rationale; the synth lives at the call sites that have status information.
 - **Inline the 429 check at each of the six callsites.** Rejected per Part 4a — six identical defensive blocks earn the small helper; inline would force the 429-only contract to be re-derived six times by future readers.
@@ -1030,6 +1218,7 @@ Shipped per-namespace translation checksums and per-base-site catalog checksums 
 **Scope shipped — `/baseSite/details` removal (Brief 7):**
 
 Web's two usages of `/api/public/baseSite/details` were trivially removable:
+
 - `getAllBaseSites()` in `app/actions/getBaseSiteServer.ts` was dead code (zero importers) — deleted.
 - `sitemap.ts` only read `code`, `allowedLanguages`, `defaultLanguage` from the heavier endpoint — migrated to `/api/public/baseSite/overviews` (lighter `BaseSiteOverviewDTO` carries all three fields with identical types).
 - Backend endpoint `/api/public/baseSite/details` kept in place; Expo adoption may use it.
@@ -1072,6 +1261,7 @@ Web's two usages of `/api/public/baseSite/details` were trivially removable:
 - **Mid-feature scope expansion requires immediate spec amendment, not deferred-to-close.** The feature underwent two scope expansions in chat (`/baseSite/details` removal, then admin translation UX, then unified admin cache page). Spec amendments were appended in chat but `§11`'s brief order list wasn't kept current — the web engineer on Brief 11 paused implementation correctly because the spec didn't list Briefs 9-11. A small Docs/QA session amended `§11` mid-chat. Carry forward: any further scope expansion gets a spec amendment BEFORE the engineer brief, not after.
 
 - **`oglasino-web` uses `stage` branch, not `dev`.** Mastermind wrote `dev` in every web brief in this chat; engineer correctly stayed on `stage` per the hard rule (don't switch branches) and flagged on every brief. Carry forward: future web briefs say `stage`. Backend stays `dev`.
+
   - **Correction 2026-06-01 (supersedes the carry-forward above for future briefs).** `oglasino-web` now works on `dev`. The entire create + update product-parity feature ran on web `dev` (all four web session summaries declare `Branch: dev`), and Igor has confirmed `dev` is the current web branch. **Future web briefs say `dev`, not `stage`.** The dated `stage` records in earlier entries (review-reports and error-code-domain-split, both 2026-05-29; expo-maintenance-split) remain accurate as history — web was on `stage` then; this corrects only the forward-looking rule, it does not rewrite where past work landed.
 
 - **RU translations use Latin transliteration with `''` (SQL-escaped apostrophe) for soft signs in infinitive verb forms.** Brief 9 engineer flagged Mastermind's RU drafts were missing this convention. Carry forward: future Mastermind RU drafts include `''` in transliterated infinitives (e.g., `sokhranit''`, `obnovit''`, `udalos''`). Brief 12 RU drafts already applied this.
@@ -1081,6 +1271,7 @@ Web's two usages of `/api/public/baseSite/details` were trivially removable:
 **What's not yet done (Expo adoption):**
 
 The `oglasino-expo` mobile app does not yet consume `/api/public/versions`. The whole feature was built FOR this consumer; current mobile still polls translations on app open (or whatever the current behavior is). Expo adoption is a future feature with its own Mastermind chat:
+
 - Phase 1: how does Expo currently fetch translations and base-site data?
 - Phase 2-3: design the polling cadence, the per-namespace refetch trigger, the cache invalidation strategy on the mobile side.
 - Phase 5: implement.
@@ -1099,7 +1290,7 @@ The fix: always-mount `<Stack>` and render the non-`ready` states (loading, main
 
 A secondary bug in `AppContext.tsx` was fixed in the same session — the main effect had `state.status` in its dependency array, which caused a double-bootstrap pattern. `state.status` removed from deps; a `statusRef` was added so the polling interval can read current status without re-triggering the effect. This bug pre-existed Φ2; the navigator remount loop made it visible by amplifying the symptom.
 
-**Constraint this establishes.** Any future navigator (`<Stack>` or `<Tabs>`) in this codebase must be always-mounted, not conditionally rendered. If a navigator's content depends on state that may not be ready yet, gate the navigator's *children* on that state — or render an overlay on top of the always-mounted navigator. This sits alongside the 2026-05-25 route-group-layout-files constraint as the second expo-router-specific gotcha worth carrying forward.
+**Constraint this establishes.** Any future navigator (`<Stack>` or `<Tabs>`) in this codebase must be always-mounted, not conditionally rendered. If a navigator's content depends on state that may not be ready yet, gate the navigator's _children_ on that state — or render an overlay on top of the always-mounted navigator. This sits alongside the 2026-05-25 route-group-layout-files constraint as the second expo-router-specific gotcha worth carrying forward.
 
 **Process notes worth recording, since this chat made the mistakes that surfaced these constraints:**
 
@@ -1173,6 +1364,7 @@ The Android keystore is per-profile, EAS-managed; the development tier's keystor
 First development build on EAS Cloud succeeded on both iOS and Android. iOS validated end-to-end on a physical iPhone: build install → Developer Mode enable → dev client connection to Metro → Firebase email/password login → backend round-trip authenticated. Android email/password login also validated. Google Sign-In on iOS not yet tested (deferred); Google Sign-In on Android requires final rebuild to bake the updated google-services file into the APK.
 
 Two new docs deliverables capture the as-built state and forward-looking deploy gates:
+
 - [infra/expo/cloud-setup.md](infra/expo/cloud-setup.md) — canonical state spec describing current cloud, build, and code-level architecture
 - [infra/expo/pre-deploy-checklist.md](infra/expo/pre-deploy-checklist.md) — forward-looking checklist of items needed before preview / production tiers can ship to testers or users (per-tier keystore extraction, APNs key, Play Console listing, etc.)
 
@@ -1575,7 +1767,7 @@ The portal home (`/[locale]`) fired 4 `POST /api/public/product/search` calls pe
 
 1. **FilterManager SYNC TO URL trailing-slash false-positive + redundant `setTimeout(router.refresh)`** (`src/components/client/initializers/FilterManager.tsx`). The effect's URL-canonicalization gate compared `newUrl` (always trailing-slash on the no-filters home) to `current` (no trailing slash) and fired `router.replace('/rs-sr/') + setTimeout(() => router.refresh(), 0)` on every refresh. In Next 16, `router.replace` to a new pathname already refetches RSC; the `setTimeout(refresh)` was leftover from an older Next version where `replace` did not consistently refetch. One firing → two RSC re-renders → two extra product-search POSTs. Fix: normalize the trailing slash in the gate (so the false positive doesn't trip on the canonical home URL), and delete the redundant `setTimeout(router.refresh)`. Lever A is route-agnostic (no other FilterManager-mounted route had the false positive because only the home produces `pathname === '/'` from next-intl's `usePathname`); Lever B applies to every legitimate FilterManager trigger anywhere. Both shipped in one session.
 
-2. **`randomSeed: Date.now()` in the `FilteredProductList` React key** (`src/components/client/product/FilteredProductList.tsx`). The no-filters home synthesizes `{ applyRandom: true, randomSeed: Date.now() }` in `parseFiltersFromQueryParams` on every SSR render. The inner `ProductList` was keyed on `JSON.stringify(filtersData)`, so a new seed → new key → React unmounts the previous list and mounts a fresh one with the new ordering. After the FilterManager fix this was mostly latent on the canonical home, but any *real* filter change still causes one re-render with a fresh seed and would re-surface the jerk. Fix: destructure `randomSeed` out before stringifying for the key calculation; the seed still reaches the backend via the unmodified `filtersData` on the request side. Locks the symptom out unconditionally.
+2. **`randomSeed: Date.now()` in the `FilteredProductList` React key** (`src/components/client/product/FilteredProductList.tsx`). The no-filters home synthesizes `{ applyRandom: true, randomSeed: Date.now() }` in `parseFiltersFromQueryParams` on every SSR render. The inner `ProductList` was keyed on `JSON.stringify(filtersData)`, so a new seed → new key → React unmounts the previous list and mounts a fresh one with the new ordering. After the FilterManager fix this was mostly latent on the canonical home, but any _real_ filter change still causes one re-render with a fresh seed and would re-surface the jerk. Fix: destructure `randomSeed` out before stringifying for the key calculation; the seed still reaches the backend via the unmodified `filtersData` on the request side. Locks the symptom out unconditionally.
 
 3. **No single-flight guard on `onIdTokenChanged` cascade** (`src/components/client/initializers/UseTokenRefresh.tsx`). The Firebase SDK emits `onIdTokenChanged` twice on cold session restoration (persisted token, then refreshed token ~8 ms later); both emissions fired `syncUserToBackend` + `initPushForAuthenticatedUser` independently. The "sole hydrator" contract (`decisions.md` 2026-05-21 Consent Mode v2 entry) was intact — there was exactly one listener — but the listener had no idempotency. Fix: `useRef`-held `{ inFlightUid, lastSyncedUid, lastSyncedAt }` with a 2-second drop window for same-uid back-to-back emissions; `writeFirebaseTokenCookie(token)` hoisted into the listener so it runs on every emission (the cookie must mirror the rotated token even when the second backend sync is dropped); guard resets on sign-out so a sign-out → sign-in handshake re-fires a fresh cascade; `lastSyncedAt` only set on success (failed syncs retryable immediately). The 2-second window is a constant, not configurable per Part 4a — the value has one setting and no foreseeable second setting.
 
@@ -1669,7 +1861,7 @@ End-to-end user-to-user messaging on Oglasino is production-ready: Firestore Sec
 - **Cron candidate-tracking via a dedicated `pending_chat_cleanup` table.** Considered (and rejected) folding the cleanup state into the existing `users` row as a tombstone. Chose a dedicated queue table for clean separation: User Deletion's hard-delete writes one row, the messaging cron consumes from the table, the cleanup is idempotent, per-user failures don't block the batch. The table sits in `V1__init_schema.sql` per the pre-prod schema fold (conventions Part 12).
 - **`messaging_cleanup_locks` is a sibling table, not an extension of `user_deletion_locks`.** Brief 5's engineer correctly identified that `user_deletion_locks` is a per-user admin-action table (locks-user-from-deletion), not a job-lock primitive. A sibling table with the proper singleton shape (`UNIQUE (job_name)`) is the right fix. If multiple crons later need singleton locks, a shared `scheduled_job_locks` table can be extracted in a future refactor brief; today only this cron uses the new table. The brief's initial premise that the locks table could be reused was incorrect, surfaced by the engineer at implementation time.
 - **Send-failure UX via React-boundary toast, not store-internal toast.** `useChatStore.sendMessage` now rethrows after cleanup; the React caller in `Messages.tsx` awaits and surfaces `notify.error`. Matches the pre-existing pattern for image-upload-failure toasts in `MessageInput.tsx`. The alternative — passing a translator function or callback through the store API — was considered and rejected because next-intl doesn't have a clean non-React access path and pushing translation into the store would have coupled two store actions to one toast call each.
-- **Navigation-aware temp state lifecycle.** `tempReceiver` and `tempProductContext` are cleared whenever the user navigates away from `/messages`, but preserved on send failure so retry from the same context works. `ChatsWatcher` was rewritten to use a previous-pathname guard (clear only when transitioning *away* from `/messages`, not *into* it from a fresh Start-Message click).
+- **Navigation-aware temp state lifecycle.** `tempReceiver` and `tempProductContext` are cleared whenever the user navigates away from `/messages`, but preserved on send failure so retry from the same context works. `ChatsWatcher` was rewritten to use a previous-pathname guard (clear only when transitioning _away_ from `/messages`, not _into_ it from a fresh Start-Message click).
 - **Anchor visible-text vs `href` choice on auto-linkify.** A bare `www.example.com` URL displays as `www.example.com` (the user's raw text) but its `href` is the linkify-normalized `http://www.example.com` (so the browser navigates correctly). "What you see is what you click" reads as anti-mask language ("no 'click here' wrappers"), not as a literal `text === href` requirement. Engineer's call, mastermind-confirmed.
 - **`users/{userId}` Firestore collection tightened to owner-only.** Documents on this path carry PII (email, fcmToken, displayName, profileImageKey); the pre-fix `allow read: if true` was a privacy leak. No code in `oglasino-web` or `oglasino-backend` reads from this path in Firestore (audits confirmed); the mobile app may break post-rule-change and gets handled in the mobile catch-up chat.
 - **RU translations use Latin transliteration by convention.** Brief 4's engineer flagged the entire RU seed file using Latin transliteration as a possible drift; Igor confirmed it's the established convention. Documented here so future RU translation work matches.
@@ -1689,7 +1881,7 @@ End-to-end user-to-user messaging on Oglasino is production-ready: Firestore Sec
 - Brief 6a — `chats.load.more` key seed (backend) + web swap. One translation key seeded in four locales, one component call site swapped.
 - Brief 6b — This Docs/QA close-out.
 
-**Reasoning.** The feature shipped end-to-end because the data model was right from the start — chats, sidecars, blocks, deterministic chatIds, separation of Firestore for realtime + Postgres for everything else. The bugs were all in the *implementation* against that correct foundation. A rewrite was considered (and rejected in this chat's Phase 1 discussion); patching the existing implementation cost less and inherited the worn-in handling of edge cases the audits did not flag.
+**Reasoning.** The feature shipped end-to-end because the data model was right from the start — chats, sidecars, blocks, deterministic chatIds, separation of Firestore for realtime + Postgres for everything else. The bugs were all in the _implementation_ against that correct foundation. A rewrite was considered (and rejected in this chat's Phase 1 discussion); patching the existing implementation cost less and inherited the worn-in handling of edge cases the audits did not flag.
 
 **Alternatives considered.** Full rewrite of `useChatStore` and the send flow — rejected per Phase 1 discussion; data model is sound, bugs are localized, rewrite cost is ~2-3× for an outcome that's contractually identical. Bundling the admin welcome chat (the "new user gets admin chat that can't be blocked or removed" idea) into this feature — rejected per intake discussion; it composes cleanly on top of the messaging data model and gets its own future Mastermind chat post-launch.
 
@@ -1739,7 +1931,7 @@ The work is therefore two features, executed in order: **Consent Mode v2** (`fea
 
 Backend POSTs `{"tags": ["user:<id>"]}` to web `/api/revalidate` after a user state transition commits, so other viewers of the affected profile see fresh `UserInfoDTO` inside the 5-minute SSR `revalidate: 300` window. Implemented via `UserStateChangedEvent` + `@TransactionalEventListener(AFTER_COMMIT, fallbackExecution = true)` + `DefaultWebRevalidationService`. Failure is logged and swallowed. Shared-secret header authentication (Option A) chosen over IP allowlist (Option B) or no-auth (Option C) because shared-secret is the simplest defensible model for server-to-server inside a hosted environment.
 
-**Reasoning.** Frontend-driven revalidation (the existing self-deletion / self-restoration flow) covers the actor-side cache; the missing piece was viewer-side caches when *another* user is the actor (admin bans, hard deletes, scheduled deletions). Best-effort is correct because the 5-minute TTL is the upper bound on staleness — a failed revalidate is recoverable without operator action.
+**Reasoning.** Frontend-driven revalidation (the existing self-deletion / self-restoration flow) covers the actor-side cache; the missing piece was viewer-side caches when _another_ user is the actor (admin bans, hard deletes, scheduled deletions). Best-effort is correct because the 5-minute TTL is the upper bound on staleness — a failed revalidate is recoverable without operator action.
 
 **Alternatives considered.** Explicit post-commit method calls (Option B per the brief) — rejected because every new state-transition path would need to remember to call the client; event publication composes with future paths without code edits at the consumer.
 
@@ -1799,7 +1991,7 @@ Part 4a has been in conventions since 2026-05-13 but the recurring failure mode 
 
 Mastermind verdicts a session as REVISE if the structured evidence is absent or if the evidence reveals undeclared complexity additions.
 
-**Reasoning.** Engineers self-attesting to "confirmed" on a complex rule is a known weak enforcement pattern. The Conventions check has succeeded at catching brief-vs-conventions drift on rules that have a specific factual answer (Part 6 namespace, Part 7 wire shape). It has been weakest on Part 4a, which requires judgment. Asking engineers to *name* their decisions — what they added, what they didn't, what they removed — raises the cost of skipping the rule and gives Mastermind something concrete to verdict on.
+**Reasoning.** Engineers self-attesting to "confirmed" on a complex rule is a known weak enforcement pattern. The Conventions check has succeeded at catching brief-vs-conventions drift on rules that have a specific factual answer (Part 6 namespace, Part 7 wire shape). It has been weakest on Part 4a, which requires judgment. Asking engineers to _name_ their decisions — what they added, what they didn't, what they removed — raises the cost of skipping the rule and gives Mastermind something concrete to verdict on.
 
 **Alternatives considered.**
 
@@ -1822,7 +2014,7 @@ Sessions 8–19 authored every in-scope portal page topic plus the six in-scope 
 
 **2. Trust-boundary check model.** The depth standard set in sessions 10, 11, 13: trust-boundary checks must trace the chain — client supply → server derivation → identity layer → authorization. Each verification ends with a single labelled conclusion: "clean," "clean conditional on X," or "concern/violation," with named (a)-(c) checks for the verification surface. Engineers writing trust-boundary checks at this depth is the standard for Part 11 going forward.
 
-**3. Trust-boundary content belongs in audits and decisions, not topic body.** Precedent set in session 17; applied at scale in session 18. The topic body is for testers; the chain-of-evidence — request shape, claim flow, server checks — lives in session summaries and `decisions.md`. Topics carry the *consequence* of trust-boundary findings (a Known-issue pitfall, a routed verification task) but not the chain itself.
+**3. Trust-boundary content belongs in audits and decisions, not topic body.** Precedent set in session 17; applied at scale in session 18. The topic body is for testers; the chain-of-evidence — request shape, claim flow, server checks — lives in session summaries and `decisions.md`. Topics carry the _consequence_ of trust-boundary findings (a Known-issue pitfall, a routed verification task) but not the chain itself.
 
 **4. Flow-topic structural rule.** Established session 11: `optionsControls` is used when a flow has concrete surfaces to enumerate; skipped when purely behavioural. All four authored flow topics (`category-navigation`, `start-message-flow`, `follow-flow`, plus the future `report-flow`) used `optionsControls`. The schema's other four optional arrays (`howToUse`, `whatToExpect`, `pitfalls`, `qaChecklist`) carry the behavioural content.
 

@@ -16,7 +16,7 @@
 
 ## 1. Platform summary (one page)
 
-**What Oglasino is.** Oglasino is an online classifieds platform for buying, selling, and exchanging new and used goods. The platform operates in two country portals — Serbia (`rs`) and Montenegro (`me`) — and is accessible from other countries, including EU member states.
+**What Oglasino is.** Oglasino is an online classifieds platform for buying, selling, and exchanging new and used goods. The platform operates in two country portals — Serbia (`rs`) and Montenegro (`me`) — and is accessible from other countries, including EU member states. Oglasino is available both as a website and as native mobile apps for iOS and Android; both drafts now cover the apps (see Section 6).
 
 **Business model.** Free at launch. No paid features, no subscriptions, no transactions processed by the platform. Users arrange and complete transactions directly with each other; Oglasino is the venue, not a party to any transaction. Paid features are planned for post-launch but are not part of this review.
 
@@ -38,8 +38,11 @@
 | DigitalOcean | Backend hosting | Frankfurt, Germany (fra1) |
 | Vercel | Web frontend hosting (with SSR) | Frankfurt, Germany (fra1) |
 | Google reCAPTCHA | Bot detection on forms | United States |
+| Google Analytics 4 (GA4) | Website + mobile-app usage analytics (consent-gated) | United States |
+| Brevo | Transactional / platform email delivery | European Union |
+| Expo Push Service + Apple APNs + Google FCM | Push-notification delivery | United States |
 
-**No email service, no SMS, no analytics, no advertising tools, no payment processor, no error-tracking service, no third-party logging service at launch.** All planned for post-launch.
+**Live at launch beyond the table above:** transactional / platform email (Brevo), website + mobile analytics (GA4, consent-gated), and push-notification delivery (Expo / APNs / FCM). **Still absent at launch:** no SMS, no advertising tools, no payment processor, no error-tracking service, no third-party logging service — these remain planned for post-launch, if at all.
 
 **Key platform features:**
 
@@ -48,8 +51,11 @@
 - Free Zone for items given away at no cost
 - Direct messaging between users (Firestore-backed)
 - Reviews (bidirectional buyer/seller, 1–5 stars, manual admin approval)
-- Reports against users or listings (admin-handled)
-- Cookie consent (two-category: necessary + preferences)
+- Reports against users, listings, or reviews (admin-handled)
+- Transactional and platform email via Brevo (e.g. email verification, password reset, account notices)
+- Push notifications to mobile devices
+- Website + mobile analytics via GA4 (consent-gated; first-party only, no advertising signals, no cross-app tracking)
+- Cookie/consent: three-category on the web (strictly necessary + preferences + analytics) under Google Consent Mode v2; a separate device-level analytics opt-in in the mobile app
 - Account deletion (7-day soft-delete with reporting window, then hard delete; hashed audit retained 30 days general / 12 months banned-user)
 
 ---
@@ -60,7 +66,7 @@ These choices were made by the operator during intake and are reflected in the d
 
 ### 2.1 Privacy and data-protection choices
 
-- **Lawful bases** for each processing activity are listed in Section 3 of the Privacy Policy. Most processing relies on **contract** (core platform functionality), with **legitimate interest** for security, moderation, and audit, and **consent** for cookies and marketing-style communications.
+- **Lawful bases** for each processing activity are listed in Section 3 of the Privacy Policy. Most processing relies on **contract** (core platform functionality), with **legitimate interest** for security, moderation, and audit, and **consent** for cookies, analytics, and marketing-style communications.
 - **Retention periods:**
   - Active accounts: data retained while account is active
   - IP addresses in rate-limit cache: ~30 minutes
@@ -68,7 +74,7 @@ These choices were made by the operator during intake and are reflected in the d
   - Deletion audit (hashed): 30 days
   - Banned-user audit (hashed email): 12 months
 - **No data sale, no AI training on user content** — these are explicit user-facing commitments in both documents.
-- **International transfers:** OpenAI and reCAPTCHA (both US). Relying on EU-US Data Privacy Framework and Standard Contractual Clauses.
+- **International transfers:** OpenAI, Google reCAPTCHA, Google Analytics, and push-notification delivery (Expo, Apple, Google) — all US. Relying on EU-US Data Privacy Framework and Standard Contractual Clauses. The transfer mechanism for **Expo** specifically carries a lawyer-review flag (see 3.4).
 - **Children:** Platform is 18+. Self-declared age at registration.
 - **Auto-translation:** All user content (listings, profile bios, review comments) is automatically translated via OpenAI's API. Disclosed in the Privacy Policy.
 
@@ -83,6 +89,8 @@ These choices were made by the operator during intake and are reflected in the d
 - **Content license:** non-exclusive, royalty-free, limited to platform operation. Explicit exclusions: no sublicensing to third parties (beyond the listed processors), no marketing use of user content, no AI training, no resale.
 - **Modifications to Terms:** notice + explicit acceptance for material changes; notice only for non-material changes.
 - **Controlling language:** Serbian.
+- **Email verification gate:** email/password users must verify their email before they can hold a session (Terms Section 5).
+- **App access:** the platform is offered as a website and native iOS/Android apps; app-store distribution terms are addressed in Terms Section 3 (see 3.13).
 
 ### 2.3 Specific content rules
 
@@ -109,12 +117,15 @@ Every `[LAWYER REVIEW: ...]` flag from both documents, grouped by theme. Each it
 
 ### 3.3 Cookies, consent, and tracking
 
-- **Privacy Policy Section 7** — Cookie banner uses a two-category model (strictly necessary + preferences). Confirm this satisfies your interpretation of GDPR/ePrivacy in Serbia and Montenegro. Operator will add a "Manage cookie preferences" footer link before launch.
-- **Privacy Policy Section 4 (third-party table) + Section 7** — **reCAPTCHA**: confirm whether reCAPTCHA's data collection (IP, mouse movement, Google session cookies including for non-Google-account visitors) is acceptable under legitimate interest, or whether the consent banner needs a third category requiring explicit consent before reCAPTCHA loads. Industry practice varies; some EU regulators have required explicit consent in past decisions.
+- **Privacy Policy Section 7 (web)** — Cookie banner uses a three-category model (strictly necessary + preferences + analytics) under Google Consent Mode v2, with Accept-all / Reject-all / Customize, the choice stored browser-side (`og_consent`), and a cookie-preferences page at `/owner/cookies` linked from the footer (shipped). Confirm this satisfies your interpretation of GDPR/ePrivacy in Serbia and Montenegro, including that analytics is gated on prior opt-in with the three advertising signals permanently denied.
+- **Privacy Policy Section 7 (mobile app)** — The app uses a different mechanism: a single device-level analytics opt-in, off by default, no cookies, no App Tracking Transparency, first-party only. Confirm this satisfies GDPR/ePrivacy for the app in the same way the web banner is intended to.
+- **Privacy Policy Section 4 (third-party table) + Section 7** — **reCAPTCHA**: confirm whether reCAPTCHA's data collection (IP, mouse movement, Google session cookies including for non-Google-account visitors) is acceptable under legitimate interest, or whether the consent banner needs a separate, reCAPTCHA-specific category requiring explicit consent before reCAPTCHA loads. Industry practice varies; some EU regulators have required explicit consent in past decisions.
 
 ### 3.4 International transfers
 
 - **Privacy Policy Section 5** — **OpenAI**: confirm current DPF certification status at publication time. Confirm the operator has accepted OpenAI's data-processing addendum (DPA) on their OpenAI account. **If DPA not yet accepted, this is a launch-blocker.**
+- **Privacy Policy Section 5** — **Google Analytics**: relies on Google's DPF adherence + SCCs (same posture as reCAPTCHA). Confirm.
+- **Privacy Policy Section 5** — **Push-notification delivery (Expo)**: the push token and notification content pass through Expo (US) before reaching Apple (APNs) and Google (FCM). Apple and Google are covered by DPF + SCCs; confirm the transfer safeguard for **Expo** specifically (adequacy, DPF participation, or SCCs in its data-processing terms).
 
 ### 3.5 Retention periods
 
@@ -126,7 +137,7 @@ Every `[LAWYER REVIEW: ...]` flag from both documents, grouped by theme. Each it
 
 ### 3.7 User rights and response time
 
-- **Privacy Policy Section 9 — 30-day response window for email-based access/portability/rectification requests** — operator has confirmed that privacy@oglasino.com is not yet operational and will be set up before launch as a critical pre-launch action item. The Privacy Policy commits to one-month response per GDPR Article 12. **Confirm the operator has a credible plan to actually meet this commitment** before publication.
+- **Privacy Policy Section 9 — 30-day response window for email-based access/portability/rectification requests** — `privacy@oglasino.com` and `support@oglasino.com` are operational. The Privacy Policy commits to one-month response per GDPR Article 12. Confirm the operator has a credible plan to meet this commitment in practice given solo operation.
 - **Privacy Policy Section 9 — Right to data portability** — confirm draft language correctly captures GDPR's scope: data the user *provided* (profile, listings, messages, reviews), not derived data (rating, moderation flags, audit records).
 
 ### 3.8 Children
@@ -152,17 +163,22 @@ Every `[LAWYER REVIEW: ...]` flag from both documents, grouped by theme. Each it
 
 - **Terms of Use Section 16 — Modification mechanism** — confirm whether the proposed model (notice + explicit acceptance for material changes; notice only for non-material changes) is consistent with EU consumer-contract rules on unilateral modification of ongoing service contracts. Some Member States require explicit opt-in for any material change.
 
+### 3.13 Mobile apps and app-store distribution
+
+- **Terms of Use Section 3 — App-store distribution** — the apps are distributed through the Apple App Store and Google Play, which impose their own licensed-application / EULA requirements. Add the required app-store clauses before publication (for example, Apple's Licensed Application End User License Agreement terms, Apple as a third-party beneficiary entitled to enforce the agreement, and the allocation of support, warranty, and product-claims responsibility away from the app stores).
+- The mobile analytics-consent model is covered under 3.3; the Expo transfer mechanism under 3.4.
+
 ---
 
 ## 4. Pre-launch action items the operator commits to
 
 Independent of your legal review, the operator has committed to completing the following before publication. We list them here so you can confirm none of these are missing or insufficient:
 
-1. **Set up and monitor privacy@oglasino.com.** Required for GDPR right-of-access, rectification, restriction, portability, and objection handling. Mailbox does not yet exist. Auto-responder confirming receipt and 30-day commitment will be configured.
-2. **Set up and monitor support@oglasino.com.** Required for general support, complaints, and appeals. Mailbox does not yet exist.
+1. **privacy@oglasino.com — operational.** Required for GDPR right-of-access, rectification, restriction, portability, and objection handling. The mailbox is set up and monitored. (Optional polish: an auto-responder confirming receipt and the 30-day commitment.)
+2. **support@oglasino.com — operational.** Required for general support, complaints, and appeals. The mailbox is set up and monitored.
 3. **Configure Cloudflare R2 bucket jurisdiction to EU.** Currently default-global; operator will set EU jurisdiction before launch.
 4. **Accept OpenAI's data-processing addendum (DPA).** Must be accepted on the operator's OpenAI account at platform.openai.com before any user data is sent to OpenAI's API in production.
-5. **Add "Manage cookie preferences" footer link** to enable consent withdrawal for non-logged-in users. Currently the cookie banner is one-time-only with a per-user-settings re-open path; this misses non-logged-in users.
+5. **Cookie-preferences page + footer link — shipped.** Consent withdrawal is available to all visitors via the cookie-preferences page at `/owner/cookies`, linked from the website footer, with Accept-all / Reject-all / Customize controls (no longer one-time-only).
 
 ---
 
@@ -195,7 +211,7 @@ Beyond the consolidated `[LAWYER REVIEW]` flags above, the operator would like y
 For completeness, we list what was deliberately not included in this review so you can confirm none of it should have been:
 
 - **Translation into Serbian, English, and Russian.** Drafts are English-only. Translation is a separate workstream.
-- **Mobile-app-specific terms.** Oglasino has a mobile app in development but it is not yet ready for launch. App-store terms (Apple, Google Play) and any in-app-purchase mechanics are not covered.
+- **Mobile apps — now in scope and covered.** The iOS and Android apps are available, and both drafts now cover them: the Privacy Policy describes app permissions, on-device storage, mobile analytics consent, and push tokens; the Terms describe app access and app-store distribution. App-store licensed-application / EULA clauses are flagged for the lawyer (see 3.13). In-app-purchase mechanics remain not applicable (no paid features yet).
 - **GDPR data subject request forms or templates.** Not required by GDPR but useful operationally. Out of scope unless the lawyer recommends including them.
 - **Data Processing Agreements with sub-processors.** OpenAI, Cloudflare, DigitalOcean, Vercel, Firebase — each has their own DPA the operator will need to accept. Logging the operator's commitment to accept all DPAs before launch (item 4 of Section 4 above covers OpenAI specifically).
 - **Insurance.** Professional liability insurance, cyber-liability insurance — not addressed in these documents. Worth a separate conversation with you if you have recommendations.
@@ -221,8 +237,9 @@ The operator is a sole proprietor with limited resources. We propose the followi
 **Out of initial scope but planned:**
 
 - Translation review (once Serbian and Russian translations are produced).
-- Mobile-app terms.
-- Any updates triggered by post-launch features (paid subscriptions, analytics activation, etc.).
+- Any updates triggered by post-launch features (e.g. paid subscriptions).
+
+(Mobile-app terms and analytics are no longer deferred — both are live and now covered in the drafts.)
 
 ---
 

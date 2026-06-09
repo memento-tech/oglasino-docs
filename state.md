@@ -2,7 +2,7 @@
 
 The single source of truth for "where are we." Mastermind reads this at the start of every planning session. Engineer agents read the relevant slice. Docs/QA keeps it current.
 
-**Last updated:** 2026-06-05 (append-only correction to the "Product filtering and search" Expo backlog row — the 2026-06-01 region/city-wire "false alarm" retraction overturned; real wire-contract bug fixed on `new-expo-dev` 2026-06-05, Ψ owed)
+**Last updated:** 2026-06-06 (timestamp-zone-utc `shipped` — container `TZ` flipped `Europe/Belgrade` → `Etc/UTC`, 969 tests green; stage boot spot-check passed, stamped product `created_at` confirmed UTC)
 **Target:** regression testing in 1–2 weeks, production in 1 month
 
 ---
@@ -52,6 +52,23 @@ Stale `2026-05-19-oglasino-web-ga4-discovery-1.md` archived 2026-05-23 from `ogl
 ---
 
 ## Active features
+
+### Timestamp Zone — UTC
+
+- **Spec:** [features/timestamp-zone-utc.md](features/timestamp-zone-utc.md)
+- **Status:** `shipped`
+- **Branch:** backend `dev`
+- **Why active:** container `TZ` flipped `Europe/Belgrade` → `Etc/UTC`
+  (`Dockerfile:13`) so `@CreationTimestamp`/`@UpdateTimestamp` write UTC into the
+  `timestamp without time zone` columns; `DocumentProductConverter:76` /
+  `ProductDetailsConverter:78` become correct as-written, no reader code changed.
+  Pre-production: no data migration. Nine `@Scheduled` crons shift to UTC wall-clock
+  (operator-accepted; reminder now 13:00 UTC = 15:00 Belgrade summer / 14:00 winter).
+  Backend flip + own-repo doc-sync landed 2026-06-06 (969 tests green). The issues.md
+  "four call sites" framing corrected to one genuine skew site — `EmailDateFormatter`
+  and `ProductIndexer` operate on `Instant`s and were always flip-immune. Stage boot
+  spot-check passed 2026-06-06 (stamped product `created_at` confirmed UTC); flipped to
+  `shipped`.
 
 ### SEO foundation
 
@@ -320,6 +337,34 @@ Stale `2026-05-19-oglasino-web-ga4-discovery-1.md` archived 2026-05-23 from `ogl
 
 ---
 
+### Admin App Version Control
+
+- **Spec:** [features/admin-app-version-control.md](features/admin-app-version-control.md)
+- **Status:** `built / pending verification`
+- **Branches:** backend `dev`, web `dev`
+- **Why active:** Phase-4 canonical spec authored 2026-06-06 behind the four Phase-2 audits (docs, web, expo, backend); Phase 5 code-complete on `dev` 2026-06-06 across five backend + two web engineer sessions, uncommitted. Adds the missing admin-reachable write path + admin-panel view to set the mobile app-update **floor** (`minSupportedVersion`) per platform — the value the existing version gate uses to force a hard-update. Backend + web only; mobile (`oglasino-expo`) already reads the gate and obeys the backend-computed booleans, untouched. See [decisions.md](decisions.md) 2026-06-06 (close-out).
+
+**Delivery (2026-06-06, `dev`):** backend — admin controller `/api/secure/admin/app/version` (GET both platforms + `POST .../floor`) with class-level `@PreAuthorize("hasRole('ADMIN')")`; shared `AppVersionService` doing strict 3-part-semver validation (`422 APP_VERSION_FLOOR_INVALID_SEMVER`) and floor>ceiling rejection (`422 APP_VERSION_FLOOR_ABOVE_CEILING`); dedicated `AppVersionValidationException` + handler; `/internal` write paths left byte-identical; `AppVersionAdminDTO.updatedAt` pinned `LocalDateTime`→`Instant` (explicit-zone, trailing `Z`, `systemDefault()` conversion) + a serialization test; `ADMIN_PAGES` + `COMMON` keys seeded EN/RS/RU/CNR (RS/RU/CNR placeholder pending native review). web — `/admin/version` route + `VersionControlPanel` + `appVersionService` client + one nav item, mirroring `/admin/cache`. No schema change (no actor column — `updatedAt` only).
+
+**Tasks remaining:** (a) Igor commits (backend + web, `dev`); (b) live verification on a running stack — **nothing has been exercised end-to-end yet** (set/raise the floor per platform, confirm the floor>ceiling and bad-semver 422s surface as translated messages, confirm the "updated X ago" provenance reads correctly off the new explicit-zone `updatedAt`); (c) native-translator review of the RS/RU/CNR `version.*` ADMIN_PAGES + `admin.version.label` COMMON placeholders. **Surfaced at close, separate follow-up:** the `BaseEntity` LocalDateTime-as-UTC timestamp-zone bug ([issues.md](issues.md) 2026-06-06) — feature-independent, has a data-migration dimension, deferred to a dedicated session.
+
+---
+
+### Notifications Toggle Removal
+
+- **Spec:** [features/notifications-toggle-removal.md](features/notifications-toggle-removal.md)
+- **Status:** `shipped` (2026-06-06)
+- **Branches:** backend + web + mobile
+
+Toggle + `allowNotifications` flag removed end-to-end across backend/web/mobile
+(legal-confirmed not-required, audit-confirmed gated-no-delivery). Off-switch is
+OS/browser permission; logout detaches the token; registration on the auth/boot
+path, unchanged. See [decisions.md](decisions.md) 2026-06-06 close-out; the 3 dead
+COOKIES seed keys were deleted directly from the backend seed (the Ω pass had
+already run before this feature).
+
+---
+
 ## Backlog
 
 Each becomes its own `features/<slug>.md` when it goes active.
@@ -362,6 +407,17 @@ Mobile adoption sessions are slugged per feature, not per time window. A session
 | [Deep linking (universal/app links)](features/deep-linking.md) | code-complete, pending Ψ (no web/backend `web-stable` row — router+expo feature) | `in-progress` | `oglasino-expo-deep-linking-*` (four stacked, uncommitted on `new-expo-dev`) | App-side **code-complete** on `new-expo-dev` (uncommitted): `+native-intent` locale strip+parse+stash; native config (`app.config.ts` associatedDomains/intentFilters, tier-branched, apex-only); same-base-site filter hydration; cross-site/cross-language base-site switch via boot Gate 3 with link-language filter resolution (preferred display language never persisted-over). Router serves the two `.well-known` files tier-correct. **Blockers to live verification:** prod+preview prebuild/build (on-disk build is dev-tier); preview Android SHA-256 (keystore gen) + prod Android SHA-256 (Play Console) — both placeholders in router (open [issues.md](issues.md) 2026-06-04); on-device Ψ pass. iOS fully configured. **Do NOT promote to `mobile-stable` until Ψ.** See [features/deep-linking.md](features/deep-linking.md) and [decisions.md](decisions.md) 2026-06-04. |
 
 Mobile status values: `not-started`, `in-progress`, `adopted`, `mobile-stable`.
+
+---
+
+## Ω teardown
+
+Cross-repo / deferred cleanup items routed to the Ω final-sweep chat.
+
+- **Inert `account-verification.tsx` stub + dead `UserMenu` entry** (`oglasino-expo`),
+  plus the optional email-package relocation — deferred non-blocking cleanups from the
+  Email Notifications feature (see the Email Notifications block above and
+  [features/email-notifications.md](features/email-notifications.md) §9).
 
 ---
 
@@ -534,6 +590,7 @@ Tracked across sessions. Updated when status changes.
 - **Claude Code Read tool fabricating content — known upstream bug.** Four occurrences across three repos of the `Read` tool returning content that doesn't match disk. Most recent case (2026-05-18, web repo): `Read` returned 30 lines of content for a `ConsentMode.tsx` file that `cat`/`ls`/`grep` confirm does not exist on disk. Engineers cross-checking with shell commands have caught every instance, but the audit-driven workflow depends on tool reads being trustworthy. This is a known Claude Code issue (https://github.com/anthropics/claude-code/issues/57615) reported on 2.1.138 and observed locally through 2.1.159 — the bug is not specific to any one version. Pattern of fabrication: model presents unverified content as fact, including for files that don't exist; verification tools work when invoked but are not invoked proactively. Mitigation: engineers cross-check every audit `Read` against `cat`/`ls`/`grep`, do not trust file contents from `Read` alone. Resolution: depends on Anthropic shipping a fix.
 - **DO 25-connection ceiling (accepted, launch).** The DB Overload Protection feature buys time on the connection cap; it does not replace scaling. Prod is 18 HikariCP + ~5 DO-reserved against a 25-connection cluster cap. Operator should have a written DO-tier upgrade plan. Close when a tier upgrade lands or the plan is documented.
 - **OSIV is load-bearing and unset — `spring.jpa.open-in-view` defaults to `true` (medium; open/standing).** `spring.jpa.open-in-view` is unset in every environment YAML, so it takes Spring Boot's default of `true`. Open-Session-In-View is load-bearing: several read paths map entities to DTOs in non-transactional facades **after** the service transaction has closed, relying on OSIV to keep the session open through serialization. Confirmed OSIV-dependent today: `Review.imageKeys` on the review listings, and the follower/following and admin-report listing lazy associations. **Hazard:** if the `backend-security-hardening` track (or any change) disables OSIV without first adding JOIN FETCH / entity graphs / batch-fetch to those paths, those endpoints throw `LazyInitializationException` at serialization. Surfaced by the `jpa-fetch-tuning` audits; jpa-fetch-tuning did **not** add to this exposure (Batch 1's `Review.translations` LAZY flip is safe — no consumer navigates that collection). A standing dependency independent of jpa-fetch-tuning, recorded so the two tracks do not surprise each other. Close when OSIV is either explicitly pinned with the dependent fetch paths converted, or confirmed safe to disable.
+- **`dev` branch intermingles ≥3 uncommitted features alongside the timestamp flip (branch-hygiene; low).** The backend `dev` tree carries the `timestamp-zone-utc` flip intermingled with at least three other concurrent uncommitted features (AppVersion admin, email/notifications, DB-overload guard), so the timestamp diff cannot be isolated by `git diff HEAD`. The 2026-06-06 re-audit inspected each timestamp-attributable hunk individually and confirmed all fall inside the spec's Brief-1 scope — the flip itself is sound. This is not a flip defect; it is awareness for whoever commits that the branch mixes features. Close when `dev` is committed / the features are separated.
 
 ---
 

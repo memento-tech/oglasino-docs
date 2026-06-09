@@ -11,6 +11,8 @@
 
 Oglasino is an online classifieds platform for buying, selling, and exchanging new and used goods. The platform operates in two country portals — Serbia (rs) and Montenegro (me) — and is also accessible to visitors from other countries, including the European Union. Oglasino does not handle or mediate payments between users; all transactions are arranged and completed directly between buyers and sellers.
 
+You can use Oglasino through our website and through our native mobile apps for iOS and Android. This Privacy Policy applies to all of them. The mobile apps offer the same features as the website and handle your data in the same way, except where the device makes a difference — app permissions (such as the camera) and on-device storage — which we describe explicitly in Sections 2.16 and 7.
+
 The data controller for Oglasino is:
 
 **Igor Stojanović**
@@ -33,7 +35,7 @@ When you create an account on Oglasino, we collect and store:
 
 - **Email address** — required for account creation, login, and account-related notifications.
 - **Authentication identifier (Firebase UID)** — an internal identifier issued by our authentication provider, Firebase Authentication. This identifier links your account in our database to your authentication record.
-- **Display name** — for accounts created with email, this is initially derived from the part of your email address before the "@" symbol; for accounts created through Google sign-in, it is taken from your Google profile. You can change your display name at any time in your profile settings.
+- **Display name** — a name shown on your public profile and listings. You choose it when you register with an email address; for accounts created through Google sign-in, it is taken from your Google profile. (If a display name is ever unavailable at registration, the part of your email address before the "@" symbol may be used as a fallback.) You can change your display name at any time in your profile settings.
 - **Sign-in provider** — whether you registered with email or with Google.
 - **Email verification status** — whether your email has been verified.
 - **Password** — your password is never sent to or stored by Oglasino. It is handled exclusively by Firebase Authentication, our authentication provider. Oglasino has no access to it.
@@ -61,7 +63,7 @@ To create or browse listings, the platform needs to know which country portal yo
 - **Region** — chosen when you create your first listing.
 - **City** — chosen when you create your first listing.
 
-Your location is set at the level of your account, not per listing. All your listings are associated with the same region and city as your account; the platform does not support listing goods located in a different region or country than the seller.
+Your location is set at the level of your account, not per listing. All your listings are associated with the same region and city as your account; the platform does not support listing goods located in a different region or country than the seller. We do not use your device's GPS or any other automatic geolocation — including in our mobile apps; your area comes only from the portal, region, and city you select.
 
 **Lawful basis:** performance of a contract (Article 6(1)(b)) — Oglasino is a geographically scoped local classifieds platform; the listings feature cannot function without your location.
 
@@ -88,7 +90,9 @@ The platform includes a private messaging feature between users. We store:
 - **Messages** — sender, recipient, message content, timestamp, read status. Messages are stored on Google Firestore (see Section 4).
 - **Image attachments** — you may attach images to messages. These are stored on Cloudflare R2.
 - **Optional product reference** — when you start a conversation with another user by clicking "Send message" on a listing's page, the first message you send in that conversation includes a reference to that listing.
-- **Notifications** — when another user sends you a message, follows you, or interacts with your profile, we store a notification on Firestore. Notifications contain only a generic indication (for example, "you have a new message from John Doe"); they do not contain message content previews.
+- **Notifications** — we notify you about relevant activity, and how we do it depends on the event:
+  - For events such as someone favoriting your listing, following you, or an administrator action on your account, we store an in-app notification on Firestore **and** send a push notification to your device (using your device's push token — see Section 2.15). These contain a short indication of the event (for example, the event type and the other user's display name).
+  - For new chat messages, we send a **push notification only** — we do not store a separate in-app notification record. So that you can read the message from your device's notification screen (as is standard for messaging), the chat-message push notification shows the sender's display name and the message text.
 
 **Access to messages.** The platform's administrators may access message contents to investigate reports of misconduct or violations of our Terms of Use. Outside of moderation work, your messages are visible only to you and the other participant in the conversation. This moderation capability is necessary for the safety of our users and is the basis on which we allow reporting of messages.
 
@@ -129,10 +133,10 @@ This processing involves transferring your text outside the European Economic Ar
 
 ### 2.9 Reports
 
-Any user may report another user or a listing for violating our Terms of Use. When a report is filed, we store:
+Any user may report another user, a listing, or a review for violating our Terms of Use. When a report is filed, we store:
 
 - **Who filed the report** — the reporter's account.
-- **Who or what is being reported** — the target user or listing.
+- **Who or what is being reported** — the target user, listing, or review.
 - **Report category** — one of: fraud, poor service, rules violation, violence or harassment, inappropriate content, misleading or fake listing, portal rules violation, technical issue, other.
 - **Description** — free text from the reporter.
 - **Resolution status** — whether an administrator has reviewed the report, and any resolution notes.
@@ -156,11 +160,11 @@ To keep the platform safe, we maintain the following data about each user:
 
 Your account stores your communication preferences, which you can change at any time in your settings:
 
-- Whether you allow non-essential preference cookies.
-- Whether you allow in-app notifications.
 - Whether you allow transactional emails about your account.
 - Whether you allow promotional or marketing emails.
 - Whether you allow other users to call your phone number.
+
+Cookie and analytics choices are not stored as account settings: on the website you make them through the cookie consent banner (stored in your browser), and in the mobile app through the app's analytics setting (stored on your device). See Section 7. Notifications are controlled by your device's or browser's notification permissions rather than by an account setting (see Sections 2.5 and 2.15): turning notifications off in your operating system or browser stops them, and signing out detaches your device from push notifications.
 
 Note that even if you turn off "transactional emails," we may still send you emails that are essential to your use of the platform (for example, confirming that your account is scheduled for deletion). Truly optional and promotional emails are gated by the "promotional emails" toggle.
 
@@ -180,6 +184,31 @@ To keep the platform functioning, secure, and abuse-resistant, we process:
 
 When you delete your account, we retain a limited audit record after deletion. See Section 8 (Data retention) for full details.
 
+### 2.14 Analytics data
+
+To understand how Oglasino is used and to improve it, we collect analytics data using Google Analytics 4 (GA4) on both the website and the mobile app — but **only if you consent**. When enabled, GA4 collects pseudonymous usage information such as pages or screens viewed, searches and filters used, listings viewed, and similar interaction events, together with a pseudonymous analytics identifier (on the web, an analytics cookie identifier; in the mobile app, a Firebase app-instance identifier). If you are logged in, we associate these events with your account's user identifier so that usage can be understood across your sessions. Our analytics is first-party only: we do not use it for advertising, ad targeting, or cross-site or cross-app tracking, and Google's advertising signals are disabled. How you give or withhold consent differs by platform: on the website, through the cookie banner; in the mobile app, through a device-level choice you make when you first open the app and can change anytime in the app's settings (see Section 7 for both). Analytics is off by default; we do not enable analytics collection unless you have allowed it.
+
+**Lawful basis:** consent (Article 6(1)(a)). You can withdraw consent at any time through the cookie banner or the cookie-preferences page; withdrawal does not affect the lawfulness of processing before withdrawal.
+
+### 2.15 Push notification tokens
+
+If you use the Oglasino mobile app and allow notifications, your device is issued a **push token** — an identifier that lets us send push notifications to that specific device. We store your push token in our database and associate it with your account so that we can deliver notifications to you (for example, new-message alerts; see Section 2.5). Your push token is detached from your account when you sign out, and is replaced or removed as your device or its permissions change. Push notifications are delivered through the providers listed in Section 4.
+
+**Lawful basis:** performance of a contract (Article 6(1)(b)) — delivering notifications is part of the messaging and account service you sign up for. You can stop push notifications at any time by turning them off in your device settings or by signing out.
+
+### 2.16 Using the mobile app — device permissions and device data
+
+Our iOS and Android apps ask your permission to use certain device features, and only when a feature needs them:
+
+- **Camera and photo library** — when you take or choose a photo to add to a listing, your profile picture, a message, or a review. The app accesses the camera or photo library only at the moment you choose to add a photo; the photos you then select are handled as described in Sections 2.2, 2.4, 2.5, and 2.6.
+- **Notifications** — to send you push notifications. This results in a push token for your device (see Section 2.15).
+
+You can grant or revoke these permissions at any time in your device's settings.
+
+To be clear about what the mobile app does **not** do: it does **not** access your device's location (GPS) — the region and city used on the platform are the account-level values you choose yourself (see Section 2.3), not your device location; it does **not** read your contacts; it does **not** collect an advertising identifier (such as Apple's IDFA or Android's advertising ID); it does **not** use Apple's App Tracking Transparency; and it does **not** track you across other apps or websites.
+
+The app also stores some information on your device; see Section 7.
+
 ---
 
 ## 3. How we use your data — summary
@@ -197,6 +226,8 @@ To make Section 2 easier to navigate, here is a summary of every purpose for whi
 | Automatically translating your content into other supported languages | Contract |
 | Sending you the communications you have opted into | Consent |
 | Setting non-essential cookies in your browser | Consent |
+| Measuring and improving the website with analytics (only if you consent) | Consent |
+| Delivering push notifications to your device | Contract |
 | Preventing fraud, abuse, and spam | Legitimate interest |
 | Moderating content and enforcing platform rules | Legitimate interest |
 | Maintaining the platform's security and reliability | Legitimate interest |
@@ -219,6 +250,9 @@ We use a number of external service providers to operate Oglasino. Each of them 
 | **DigitalOcean** | Backend application hosting | All data processed by our backend services | Frankfurt, Germany (fra1 region) |
 | **Vercel** | Web frontend hosting (including server-side rendering) | Page requests, session cookies, request bodies | Frankfurt, Germany (fra1 region) |
 | **Google reCAPTCHA** | Bot detection on forms | IP address, browser information, mouse and timing data, cookies set by Google | United States |
+| **Google Analytics 4 (Google LLC)** | Website and mobile-app usage analytics | Pseudonymous usage events and analytics identifiers (the `_ga` cookie on the web; a Firebase app-instance identifier in the mobile app); collected only if you consent to analytics | United States |
+| **Brevo** | Sending account and platform emails (e.g. email verification, password reset, account notices) | Your email address and the content of those emails | European Union |
+| **Expo Push Service, with Apple Push Notification service (APNs) and Firebase Cloud Messaging (FCM)** | Delivering push notifications to your device | Your device push token and the notification content (including, for chat-message notifications, the sender's display name and message text) | United States (Expo; Apple; Google) |
 
 [LAWYER REVIEW: reCAPTCHA — confirm whether reCAPTCHA's data collection (IP address, mouse movement, Google session cookies including for non-Google-account visitors) is acceptable under legitimate interest, or whether the cookie consent banner should include a separate category requiring explicit consent before reCAPTCHA loads. Industry practice varies; some EU regulators have required explicit consent for reCAPTCHA in past decisions.]
 
@@ -230,12 +264,14 @@ We use a number of external service providers to operate Oglasino. Each of them 
 
 Most of our processing takes place inside the European Economic Area (EEA), which has the data-protection standards required by GDPR.
 
-Two of our processors are based in the United States: **OpenAI** (for content translation) and **Google reCAPTCHA** (for bot detection). When your data is sent to these processors, it leaves the EEA.
+Several of our processors are based in the United States: **OpenAI** (for content translation), **Google reCAPTCHA** (for bot detection), **Google Analytics** (for website analytics, only if you consent), and the providers that deliver push notifications to your device (**Expo**, and the underlying **Apple** and **Google** push services). When your data is sent to these processors, it leaves the EEA.
 
 We rely on the following safeguards for these transfers:
 
 - **OpenAI** — we transfer data under the European Commission's Standard Contractual Clauses, and OpenAI's adherence to the EU-US Data Privacy Framework (where applicable). [LAWYER REVIEW: confirm OpenAI's current DPF certification status at publication time and confirm the operator has accepted OpenAI's data-processing addendum (DPA) on their OpenAI account. If DPA not yet accepted, this is a launch-blocker.]
 - **Google reCAPTCHA** — we rely on Google's adherence to the EU-US Data Privacy Framework and Google's Standard Contractual Clauses.
+- **Google Analytics** — for users who consent to analytics, we rely on Google's adherence to the EU-US Data Privacy Framework and Google's Standard Contractual Clauses.
+- **Push notification delivery** — push notifications are routed through Expo and the underlying Apple (APNs) and Google (FCM) push services. We rely on Apple's and Google's adherence to the EU-US Data Privacy Framework and Standard Contractual Clauses. [LAWYER REVIEW: confirm the transfer safeguard for Expo (Expo Push Service) specifically — whether it is covered by an adequacy decision, DPF participation, or SCCs in its data-processing terms — since the push token and notification content pass through Expo before reaching APNs/FCM.]
 
 You can request more information about these safeguards by contacting us at privacy@oglasino.com.
 
@@ -255,21 +291,25 @@ If we ever change either of these commitments, we will tell you clearly before t
 
 ## 7. Cookies and similar technologies
 
-The Oglasino website uses cookies and similar browser storage mechanisms (such as localStorage and IndexedDB). We use these for two purposes:
+The Oglasino website uses cookies and similar browser storage mechanisms (such as localStorage and IndexedDB); our mobile apps use similar on-device storage instead of cookies. This section covers both — the website first, then the mobile app. On the website, we use cookies and similar storage for three purposes:
 
 **Strictly necessary** — required for the website to function. These include your authentication session (managed by Firebase Authentication, stored in localStorage and IndexedDB), security tokens (for example, CSRF protection), the cookie consent state itself, and a small number of similar technical cookies.
 
 **Preferences** — used to remember your choices, such as your preferred language, your selected country portal (Serbia or Montenegro), and similar settings.
 
-We do **not** currently use analytics cookies, advertising cookies, or tracking cookies of any kind. If we add analytics in the future (for example, Google Analytics or Vercel Analytics), we will update this Privacy Policy, update our consent banner to add an analytics category, and request your consent before loading any analytics scripts. The current consent banner does not offer this option because we do not currently set any cookies that require it beyond preferences.
+**Analytics** — used to measure how the website is used so that we can understand and improve it. We use Google Analytics 4 (GA4). Analytics cookies (for example, `_ga` and `_gid`) and analytics collection are set **only if you consent** to the analytics category; if you decline, no analytics cookies are set and no analytics data is collected. We use Google Consent Mode v2: of Google's four consent signals, only analytics storage can be enabled by your choice — the three advertising-related signals (`ad_storage`, `ad_user_data`, `ad_personalization`) are permanently denied, because we do not use Google's advertising features. Our analytics is first-party only; we do not use it for advertising, ad targeting, or cross-site tracking.
 
 This list of cookies may be updated over time as the platform evolves; we will keep this section current.
 
-**Cookie consent.** When you first visit Oglasino, you are asked to accept or decline preference cookies. Strictly necessary cookies cannot be declined because the site cannot function without them. You can change your cookie preferences at any time by clicking the "Manage cookie preferences" link in the website footer, or from your account settings page if you are logged in. When we make a material change to this Privacy Policy or our Terms of Use, the consent banner reappears so that you can review and re-confirm your choices.
+**Cookie consent.** When you first visit Oglasino, a consent banner lets you **Accept all**, **Reject all**, or **Customize** your choices by category. Strictly necessary cookies cannot be declined because the site cannot function without them; the preferences and analytics categories are optional and stay off until you allow them. Your choice is recorded in a small cookie stored in your own browser (named `og_consent`) — because it is stored in your browser rather than on your account, the choice applies to that browser. You can change your cookie preferences at any time on our cookie-preferences page (reachable at `/owner/cookies` and from the website footer), or from your account settings page if you are logged in. When we make a material change to this Privacy Policy or our Terms of Use, the consent banner reappears so that you can review and re-confirm your choices.
 
-[LAWYER REVIEW: Cookie consent banner — confirm that the two-category model (strictly necessary + preferences) plus a footer "Manage cookie preferences" link satisfies your interpretation of GDPR/ePrivacy requirements. The operator has confirmed plans to add the footer link before launch.]
+[LAWYER REVIEW: Cookie consent banner — confirm that the three-category model (strictly necessary, preferences, analytics), with Accept-all / Reject-all / Customize controls, the choice stored browser-side, and a footer link to the cookie-preferences page, satisfies your interpretation of GDPR/ePrivacy requirements — including that analytics is gated on prior opt-in via Consent Mode v2, with the three advertising signals permanently denied.]
 
 **Third-party scripts.** One third-party script on our site requires specific disclosure: **Google reCAPTCHA**. reCAPTCHA loads on pages with forms (registration, login, listing creation) to prevent automated abuse. It sets its own cookies (including the `_GRECAPTCHA` cookie) and collects information including your IP address, browser environment, mouse movements, and the contents of any Google session cookies you already have. We rely on reCAPTCHA's processing as a legitimate interest in fraud prevention. For more information, see Google's own privacy disclosures at https://policies.google.com/privacy.
+
+**Mobile app — on-device storage.** The mobile apps do not use cookies. Instead, they store information on your device to make the app work, including: your sign-in session (held by Firebase Authentication); your selected portal, language, theme, and display preferences; your analytics choice (see below); cached translations and catalog data; timing markers used to avoid re-asking for permissions or re-showing the same notification; and a cached copy of images the app has displayed. Most of this is functional or preference data. Your sign-in session and the stored copy of your account profile are cleared when you sign out; a small number of non-identifying functional items — for example, a flag recording that your account was already set up on the device, and the app's image cache — may remain on the device after sign-out until your operating system reclaims them. You can clear everything by signing out and deleting the app, or through your device's app-storage controls.
+
+**Mobile app — analytics consent.** Analytics in the mobile app works differently from the website: there is no cookie banner and there are no cookies. Instead, when you first open the app we ask whether to allow analytics, and analytics is **off by default** — we do not enable analytics collection unless you allow it. You can change your choice at any time in the app's settings. The mobile app's analytics is the same first-party GA4 described above, reporting into the same analytics property using a Firebase app-instance identifier; it does **not** use Apple's App Tracking Transparency and does **not** collect an advertising identifier. [LAWYER REVIEW: confirm the mobile analytics-consent model — a single device-level opt-in, off by default, no cookies, no App Tracking Transparency, first-party only — satisfies your interpretation of GDPR/ePrivacy for the app, in the same way the cookie banner is intended to for the website.]
 
 ---
 
@@ -357,8 +397,9 @@ Under GDPR and Serbian data-protection law, you have the following rights about 
 
 **Right to object.** You can object to our processing of your data when we rely on legitimate interest. You can object to receiving promotional emails by turning off the corresponding toggle in your settings, and we will always honor that. For other objections, email privacy@oglasino.com and we will assess your objection.
 
-**Right to withdraw consent.** Where we rely on your consent (preference cookies, communication preferences), you can withdraw it at any time:
-- Cookie preferences: through the "Manage cookie preferences" link in the website footer or your account settings.
+**Right to withdraw consent.** Where we rely on your consent (cookies and analytics, communication preferences), you can withdraw it at any time:
+- Cookie and analytics preferences on the website: through our cookie-preferences page (at `/owner/cookies`, linked in the website footer) or your account settings.
+- Analytics in the mobile app: through the analytics setting in the app.
 - Communication preferences: through the toggles on your account settings page.
 
 Withdrawing consent does not affect the lawfulness of any processing we did before withdrawal.
@@ -366,8 +407,6 @@ Withdrawing consent does not affect the lawfulness of any processing we did befo
 **Right to lodge a complaint with a supervisory authority.** If you believe we have not handled your personal data lawfully, you have the right to complain to a data-protection authority. In Serbia, the relevant authority is the Commissioner for Information of Public Importance and Personal Data Protection (Poverenik za informacije od javnog značaja i zaštitu podataka o ličnosti) — https://www.poverenik.rs/. If you are in the EU, you can also complain to the data-protection authority in your country of residence.
 
 **How we respond to requests.** We aim to respond to all data-subject requests within one month of receiving them. In limited cases involving particularly complex requests, GDPR allows us to extend this by up to two further months, in which case we will tell you within the first month.
-
-[LAWYER REVIEW: 30-day response window for email-based requests — the operator has confirmed that the dedicated privacy@oglasino.com mailbox is not yet operational and will be set up before launch as a critical pre-launch action item. The Privacy Policy commits to a one-month response window from publication. The lawyer should confirm this commitment is operationally supported before publication and may wish to review what an actual reasonable response time will look like in practice given the platform's solo operation.]
 
 **Automated decision-making.** Oglasino does not currently make significant decisions about you using purely automated processes. Content validation runs automatically when you create or edit a listing (for example, checking for prohibited content), but all enforcement decisions — banning a listing, disabling an account, resolving a report — are made by a human administrator. If we introduce automated decision-making in the future, we will update this Privacy Policy.
 

@@ -65,6 +65,7 @@ Typical check surfaces by repo:
 - `oglasino-expo` — `app.config.ts` (or `app.json`), EAS build profiles in `eas.json`, environment variables
 - `oglasino-router` — `wrangler.toml` (or `wrangler.jsonc`), KV bindings, route definitions, the worker code itself
 - `oglasino-firestore-rules` — `firestore.rules`, `firestore.indexes.json`, `firebase.json`, test files in `test/`
+- `oglasino-image-router` — `src/index.ts`, `src/handlers/*.ts`, `src/lib/*.ts`, `src/types.ts`, `wrangler.toml`, test files
 - `oglasino-docs` — `infra/<vendor>/` files, `infra/overview/`, runbooks, `master-plan.md` checkboxes
 
 Output: a numbered list of edits, ordered by execution dependency. For each, name the agent that will do it and the rough scope of the brief.

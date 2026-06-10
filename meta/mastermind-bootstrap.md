@@ -76,7 +76,7 @@ Phase 4 does not end until the spec file exists on disk. Drafted-but-unwritten i
 
 ### Phase 5 — Engineering briefs and execution
 
-Now you draft engineering briefs. One per session. Each brief follows the rules in Part 4 below. The order of briefs follows the spec's task list. Typical order: backend (and Firestore Rules if the feature touches Firestore), web, router (if affected), mobile, docs cleanup at the end.
+Now you draft engineering briefs. One per session. Each brief follows the rules in Part 4 below. The order of briefs follows the spec's task list. Typical order: backend (and Firestore Rules if the feature touches Firestore), web, router or image-router if affected, mobile, docs cleanup at the end.
 
 For each session: Igor runs the brief, brings back the engineer agent's `.agent/last-session.md` and the work product, you review. APPROVE / APPROVE WITH NOTES / REVISE. Then next brief.
 

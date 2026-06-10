@@ -4,6 +4,50 @@ Append-only log of out-of-scope findings. Newest at the top. Each entry has a da
 
 ---
 
+## 2026-06-09 — iOS permission strings missing for photo-listing flow
+
+**Repo:** `oglasino-expo` · **Severity:** high · **Status:** fixed (pending on-device verification)
+
+`NSCameraUsageDescription` — and almost certainly `NSPhotoLibraryUsageDescription`, since the
+listing flow lets users pick existing photos — are not set. Without them the iOS photo-listing
+flow will fail/crash on first camera/library access, and the build risks App Store rejection.
+
+This **must** be set before the first iOS production build. It is a **native** change — it ships
+only in a store binary and **cannot** be delivered over-the-air (`Info.plist` is not
+OTA-updatable). So it is a hard **pre-build gate**, not a post-launch fix.
+
+**Resolution:** set either via the matching media-library config plugin (`expo-image-picker` /
+`expo-camera` `cameraPermission` + photo-library permission props) or directly in `app.config.ts`
+`ios.infoPlist`. The owning agent must **first** confirm which library the photo flow uses and
+whether it touches the photo library, rather than assume.
+
+**Assigned:** a separate engineer agent (not yet run as of 2026-06-09).
+
+> **2026-06-09 — code side closed** (`oglasino-expo` permissions-2, + backend `media-permission-denied-1` / `open-settings-label-1` seeds; all three session summaries archived to `sessions/`). The brief that opened the OTA-local-config session logged this gap as a standalone `issues.md` entry; the fix added the `expo-image-picker` config plugin to `app.config.ts` with both English iOS usage strings (`cameraPermission`, `photosPermission`) — the plugin owns the `NS*UsageDescription` keys at prebuild — and wired a deny-path toast + Open Settings across the three picker surfaces. Strings + Android picker permissions materialize only at PREBUILD (not run this session). **Not fully closed** — on-device verification owed before the pre-build gate clears (iPhone take-photo/choose-from-gallery shows the OS dialog instead of crashing; deny → toast → Open Settings; Android camera/gallery + POST_NOTIFICATIONS still land post-prebuild). Gates on Igor's on-device pass.
+
+---
+
+## 2026-06-09 — iOS force-update store URL is still the placeholder
+
+**Repo:** `oglasino-expo` · **Severity:** high · **Status:** open
+
+`HardUpdateScreen.tsx` and `SoftUpdateModal.tsx`: the iOS branch still opens
+`https://memento-tech.com`. A forced (or optional) update on iOS would route users to a
+dead URL — the iOS kill-switch / force-update lane is non-functional until this is fixed.
+The Android counterpart was wired 2026-06-09; only the iOS branch remains placeholder.
+
+**Blocked on:** the numeric App Store Apple ID, auto-assigned when the App Store Connect
+app record is created (App Information → Apple ID). That record creation precedes
+TestFlight, so the value is obtainable before public launch — not a launch-day dependency.
+Final URL form: `https://apps.apple.com/app/id<APPLE_ID>` (numeric form; survives
+app-name changes).
+
+**Resolution:** a standalone brief replaces the iOS branch once Igor provides the Apple
+ID. Must-fix before iOS production release (and before relying on the force-update gate in
+TestFlight).
+
+---
+
 ## 2026-06-06 — `ProductAudit` has no application writer
 
 **Repo:** `oglasino-backend` · **Severity:** medium · **Status:** open
@@ -370,6 +414,8 @@ the next expo prebuild. No runtime impact while unused.
 > **2026-06-04 (prod-bug-sweep) — stays open, recategorized "remove at next prebuild."** Audit confirmed the JS usage and the ATT call are gone (launch-crash fix), but the dep is still in `package.json:63` + lockfile + `node_modules` + the prebuilt iOS Pod (`Podfile.lock` ExpoTrackingTransparency 6.0.8). Removal = `npm uninstall` + prebuild, both forbidden in a code session. Not closeable as not-an-issue — there is a concrete pending action, and an unused ATT native module is App Store reviewer-bait. Fold into the next prebuild.
 
 > **Wontfix 2026-06-04 (Igor).** Removed at next prebuild as a build step; not separately tracked — a rebuild is owed regardless of this dep, so the drop rides it. Supersedes the "stays open" prod-bug-sweep note above.
+
+> **2026-06-09 — moot/closed:** the 2026-06-09 permissions audit confirmed the dep is already absent from `package.json`, plugins, and `node_modules` (all four ATT footprints grep-empty). Nothing left to remove. Closed.
 
 ---
 
@@ -1009,7 +1055,8 @@ Picking between (a), (b), and (c) is a product decision, not an engineering call
 ## 2026-05-27 — Per-locale legal markdown content (privacy + terms)
 
 **Severity:** low
-**Status:** open
+**Status:** fixed
+**Resolution:** resolved 2026-06-10 by the legal-localization feature; both web pages and both expo screens select `.en.md` (en/ru) vs `.sr.md` (sr/cnr/default) via a per-repo `src/lib/utils/legalDocUrl.ts` helper. See [decisions.md](decisions.md) 2026-06-10.
 **Found in:** `oglasino-web/app/[locale]/(portal)/(public)/privacy/page.tsx`, `oglasino-web/app/[locale]/(portal)/(public)/terms/page.tsx`.
 **Detail:** Both pages hardcode the English-only URLs (`privacy-policy.en.md`, `terms-of-use.en.md`) from `memento-tech/oglasino-platform`. Per-locale legal content is blocked on lawyer review of Serbian translations.
 

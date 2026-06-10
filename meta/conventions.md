@@ -87,6 +87,7 @@ oglasino-web/ Next.js 16 App Router, React TS, Tailwind, Zustand
 oglasino-expo/ Expo, React Native
 oglasino-router/ Cloudflare Worker, TypeScript, Wrangler 4
 oglasino-firestore-rules/ Firestore Security Rules, TypeScript tests with @firebase/rules-unit-testing
+oglasino-image-router/ Cloudflare Worker, TypeScript, Wrangler 4, R2-gated image pipeline
 oglasino-docs/ this repo — shared brain, specs, conventions
 
 Engineer agents in each code repo have **read access** to `../oglasino-docs/` as a sibling directory. They never write to docs from their working repo. Docs are written by the Docs/QA agent in its own repo, with the narrow exceptions in Part 3.
@@ -95,7 +96,7 @@ Engineer agents in each code repo have **read access** to `../oglasino-docs/` as
 
 ## Part 3 — How agents work
 
-### The seven agents
+### The eight agents
 
 - **Mastermind** — runs in Claude Desktop. Plans, decides, reviews engineer session summaries, challenges bad ideas. Never reads or writes code. Never writes to config files directly — drafts text, hands the draft to Igor, Igor briefs Docs/QA to apply.
 - **Backend engineer agent** — runs as Claude Code in `oglasino-backend`. Spring/Java only.
@@ -103,6 +104,7 @@ Engineer agents in each code repo have **read access** to `../oglasino-docs/` as
 - **Mobile engineer agent** — runs as Claude Code in `oglasino-expo`. Expo/RN only. Waits for backend and web to stabilize before touching a feature.
 - **Router engineer agent** — runs as Claude Code in `oglasino-router`. Cloudflare Worker / TypeScript only. The worker file is small but carries production traffic; care areas (maintenance matrix, fail-open KV reads, admin-request regex, stage `noindex` header, `redirect: "manual"` forwarding) are documented in that repo's CLAUDE.md.
 - **Firestore Rules engineer agent** — runs as Claude Code in `oglasino-firestore-rules`. Firestore Security Rules language + TypeScript tests only. Rules are small in line count but critical in effect; care areas (default-deny semantics, `resource` vs `request.resource`, `get()` cost, custom-claim vs field trust levels, helper scoping) are documented in that repo's CLAUDE.md.
+- **Image Router engineer agent** — runs as Claude Code in `oglasino-image-router`. TypeScript Cloudflare Worker that gates image PUT/GET against R2 via JWT verification (JOSE). Care areas (method-based dispatch, never-throw handler contract, JWT verification as the access boundary, centralized CORS/logging/error helpers, request-ID propagation) are documented in that repo's CLAUDE.md.
 - **Docs/QA agent** — runs as Claude Code in `oglasino-docs`. Maintains specs, session archives, QA topics, legal drafts, and is the sole writer of the four config files (see "Config-file writes" below).
 
 ### Branching
@@ -173,6 +175,7 @@ Non-negotiable. The session summary's "Cleanup performed" section lists what was
   - Mobile: same as web, plus `npx expo-doctor` when relevant
   - Router: `npm run lint` (which is `tsc --noEmit`) and `npm test`
   - Firestore Rules: `npm test` (vitest against the emulator project; the npm script handles emulator wiring)
+  - Image Router: `npm run lint` (`tsc --noEmit`) and `npm test`
 - If a refactor obsoletes old code, the old code is deleted in the same session. Not left "for later."
 - **Docs stay in sync with the change.** When a change makes a `README` or any other doc stale — file/folder layout, commands, scripts, env vars, endpoints, status, cross-links — update that doc in the same session. The doc that describes a change is part of the change; the task is not done until it matches reality. Each agent owns the docs in its own repo (each engineer agent its repo's `README` and `<repo>/docs/`; Docs/QA owns `oglasino-docs`). If a change in one repo invalidates a doc in another, flag it per Part 4b rather than reaching across repos.
 - Engineer agents explicitly answer the question "what does this session obsolete?" in the "Obsoleted by this session" section of the summary. "Nothing" is valid but must be written.
@@ -474,10 +477,15 @@ If validation logic produces a 500, that's a bug.
 | Mobile  | Expo, React Native, TypeScript                                                                                                                                             |
 | Edge    | Cloudflare Worker (`oglasino-router`), TypeScript, Wrangler 4, Vitest                                                                                                      |
 | Rules   | Firestore Security Rules language, TypeScript tests with `@firebase/rules-unit-testing` v4, Vitest 2, Firebase Tools 13, Node 20+                                          |
+| Image   | Cloudflare Worker (`oglasino-image-router`), TypeScript, Wrangler 4, Vitest 3 with `@cloudflare/vitest-pool-workers`, JOSE 6 for JWT, Node 22+                             |
 | Auth    | Firebase Auth — `FirebaseAuthFilter` verifies the Firebase ID token, loads auth data from `redisUserAuth`, populates `SecurityContextHolder` with `OglasinoAuthentication` |
 | Hosting | Vercel (web), DigitalOcean (backend), Cloudflare (CDN + R2 + Worker)                                                                                                       |
 | Storage | Postgres (primary), Firestore (some realtime), R2 (images)                                                                                                                 |
 | Locales | EN, SR, RU. Montenegrin (me/cnr) aliases to SR.                                                                                                                            |
+
+### Versioning
+
+`backend`, `web`, `expo` use **SemVer**, first production release `1.0.0`, versioned independently per repo (no lockstep). `router`, `firestore-rules`, `image-router` use a **bare incrementing integer marker** (`v1`, `v2`, …) in `package.json` `"version"` plus a root `CHANGELOG.md` — not SemVer. Mobile OTA, when wired, uses `runtimeVersion` policy `appVersion`; the backend force-update gate (version ceiling) is a store-redirect, not OTA. Recorded in [`../decisions.md`](../decisions.md) 2026-06-09.
 
 ---
 
@@ -505,7 +513,7 @@ Mastermind drafts `oglasino-docs/features/<slug>.md` reflecting the audited real
 
 ### Phase 5 — Engineering briefs (Mastermind drafts; engineer agents execute)
 
-One brief per session. Order typically: backend, web, router (if affected), mobile, docs cleanup. Each session ends with `.agent/last-session.md` and its named twin. Engineer agents in Phase 5 are expected to consume the Phase 2 audit for their own repo — that audit is the feature-scoped ground truth for the work they're doing.
+One brief per session. Order typically: backend (and Firestore Rules if the feature touches Firestore), web, router or image-router if affected, mobile, docs cleanup. Each session ends with `.agent/last-session.md` and its named twin. Engineer agents in Phase 5 are expected to consume the Phase 2 audit for their own repo — that audit is the feature-scoped ground truth for the work they're doing.
 
 Igor reviews each session, brings the summary to Mastermind, Mastermind verdicts, next brief. Config-file drafts produced in any session are applied by Docs/QA before the chat closes.
 

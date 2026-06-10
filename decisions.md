@@ -6,6 +6,128 @@ Format: each decision has a date, a one-line summary, the reasoning, and the alt
 
 ---
 
+## 2026-06-10 — Legal docs localized by reader language (Serbian default)
+
+Privacy Policy and Terms of Use now serve per-language on both web and mobile,
+reading the lawyer-reviewed files on memento-tech/oglasino-platform main:
+`privacy-policy.{en,sr}.md` and `terms-of-use.{en,sr}.md`. The .en.md files the
+apps already fetched are unchanged; this added the .sr.md-selection branch.
+
+**The rule (Serbian is the default).** `en` or `ru` → `.en.md`; everything else
+(`sr`, `cnr`, null, unknown) → `.sr.md`. The rule tests the en-set, not `sr`,
+because `cnr` (Montenegrin) is a distinct live language code on both platforms and
+a naive `=== 'sr'` check would wrongly route Montenegrin readers to English. Serbian
+covers Serbian + Montenegrin readers (Part 9 — Montenegrin aliases to SR) and is the
+fallback for any unexpected or absent code.
+
+**Web** (`oglasino-web`): both server pages derive the bare language via
+`getTenantLocale(await getRoutingLocale())?.oglasinoLocale ?? 'sr'` and pass the URL
+from a new `src/lib/utils/legalDocUrl.ts` helper to MarkdownViewer. The
+`TenantLocale | undefined` return is narrowed with `?.` + `'sr'` default (required
+for tsc). The hardcoded-English "pending lawyer review" comment block was deleted
+from both pages. Per-URL Data Cache keying (force-cache + revalidate:3600) gives each
+language its own entry — no cache change.
+
+**Mobile** (`oglasino-expo`, branch `dev`): both screens read
+`useBootStore((s) => s.language)?.code` and pass the URL from a new
+`src/lib/utils/legalDocUrl.ts` helper to MarkdownViewer. MarkdownViewer's fetch is
+keyed on [url], so a language change re-fetches automatically — no cache change.
+
+**One helper per repo** (not shared — the two repos share no code). Each owns the
+doc→stem map and the language→file-token rule in one place so the privacy and terms
+callers cannot drift.
+
+**No spec, no trust boundary, no cache work.** Public static content, language is
+display-only. Resolves the issues.md 2026-05-27 "Per-locale legal markdown content"
+item and the SEO-foundation deferred "per-locale legal content" item.
+
+**Rejected:** a canonical feature spec (too small for the lifecycle); a 404/file-missing
+fallback (the .sr.md files exist; the only fallback is the language ternary); a
+configurable org/repo/ref (one value, no foreseeable second — Part 4a); a narrower
+`lang` type (the helper is deliberately permissive so unknown codes fall to the sr
+default).
+
+---
+
+## 2026-06-09 — iOS image-picker permission strings + deny-path toast
+
+Closes two HIGH iOS crash blockers and wires the previously-silent permission-deny path.
+The plugin add, the two backend seeds, the toast wiring, and the audit findings below are
+**factual** (three archived session summaries — `oglasino-expo-permissions-2`,
+`oglasino-backend-media-permission-denied-1`, `oglasino-backend-open-settings-label-1` — plus
+the read-only `audit-permissions.md`). The reviewer-facing rationale for choosing English is
+Igor's stated reason.
+
+- **The two HIGH crash blockers (factual — found by the read-only 2026-06-09 permissions
+  audit):** `expo-image-picker` was installed and used, but **no** `NSCameraUsageDescription`
+  / `NSPhotoLibraryUsageDescription` was declared or plugin-injected — the first take-photo /
+  choose-from-gallery tap SIGABRTs on iOS. Reached by user action (picker sheet / avatar
+  upload), so it crashes on first tap, not at launch.
+- **Fix (factual):** added the `expo-image-picker` **config plugin** to `app.config.ts`'s
+  `plugins` array (not hand-written `ios.infoPlist` keys) with English single-string props
+  (`cameraPermission` / `photosPermission`). The plugin owns both iOS strings at prebuild and
+  declares the picker's Android permissions via manifest merge.
+- **Deny-path UX (factual):** the camera/gallery deny branches were silent dead-ends; now a
+  shared `useMediaPermissionDeniedToast()` hook shows a danger toast (`permission.media.denied`)
+  + an Open Settings action (`open.settings.label`, `Linking.openSettings()`) across the three
+  picker surfaces. `MessageInput`'s PHPicker call is left ungated (needs no permission).
+- **English (not Serbian) chosen for the iOS strings — Igor's call (his stated rationale):**
+  optimizes for App Store reviewers.
+- **Rejected:** hand-writing `NS*` keys into `ios.infoPlist` (the plugin is the Expo-idiomatic
+  owner and co-locates the strings with the module); relying on the plugin's generic English
+  default strings (chose listing-specific copy); per-locale `InfoPlist.strings` (English
+  single-string now, per-locale deferred — iOS does not pull these from i18n); per-surface deny
+  keys (one shared key — same Settings destination either way).
+- **Materialization (factual):** strings/permissions land only at **prebuild** (not run this
+  session); on-device verification owed before the pre-build blocker clears (see
+  [state.md](state.md) header + Risk Watch).
+
+---
+
+## 2026-06-09 — Versioning for first production build; OTA does not yet exist (force-update gate is a store-redirect)
+
+Two coupled decisions taken while preparing the first production build: the cross-repo
+versioning scheme, and the finding that there is no OTA pipeline today.
+
+**Versioning scheme.**
+
+- `backend`, `web`, `expo` use **SemVer**; first production release is **`1.0.0`**. Each
+  repo versions **independently** — no lockstep across repos.
+- `router`, `firestore-rules`, `image-router` use a **bare incrementing integer marker**
+  (`v1`, `v2`, …), **not** SemVer. Stored in `package.json` `"version"` (npm accepted a
+  bare `"1"` with no SemVer warning in all three) plus a root `CHANGELOG.md` carrying the
+  human-facing `vN` entry. First production marker is **`v1`**.
+- Applied this session (engineer work, recorded here): backend `pom.xml`
+  `0.0.1-SNAPSHOT` → `1.0.0` (single artifact confirmed; 969 tests green); web already
+  `1.0.0` since first commit (no change needed); `router` / `firestore-rules` /
+  `image-router` `0.1.0` → `"1"` + `CHANGELOG.md` (tests green 54 / 70 / 62); expo
+  marketing version already `1.0.0` (single shared string across all three `APP_ENV`
+  tiers).
+- **Rejected:** lockstep versioning across repos (each repo versions on its own cadence
+  instead); SemVer for the three infra repos (a bare integer is simpler and matches their
+  deploy model); rewriting web `package.json` to an identical `1.0.0` (no-op churn).
+
+**OTA does not exist yet; the force-update gate is NOT OTA.**
+
+- Finding (verified in code, expo Phase A): `expo-updates` is **not installed** (absent
+  from `package.json` and `node_modules`). No `updates.url`, no `updates.enabled`, no
+  `runtimeVersion`, no channel on any `eas.json` profile. There is no OTA pipeline.
+- The existing `/internal/app/version/ceiling` + `minSupportedVersion` force-update gate
+  (`HardUpdateScreen` / `SoftUpdateModal`) is a **store-redirect** mechanism, not
+  over-the-air delivery. It pushes users to the store; it cannot deliver a fix without
+  store review. Verified: the gate compares the **marketing** version
+  (`Application.nativeApplicationVersion` = `expo.version`), not the build number.
+- **Decision (Igor, 2026-06-09):** OTA will be wired **before** the first production
+  build. `runtimeVersion: { policy: "appVersion" }` is deferred **into** that OTA track
+  and applied there as one unit — **not** applied now in isolation.
+- **Rejected:** applying `runtimeVersion: { policy: "appVersion" }` now (inert without an
+  OTA system, and would imply a capability the app lacks — Part 4a simplicity);
+  `runtimeVersion` policy `nativeVersion` (incompatible with build-number
+  `autoIncrement`); policy `fingerprint` (experimental, churn-prone).
+
+See [conventions.md](meta/conventions.md) Part 9 (Versioning) for the durable rule, and
+[state.md](state.md) (Versions section + the OTA / store-redirect Risk Watch rows).
+
 ## 2026-06-09 — Correction: mobile GA4 init is consent-only, not ATT-gated
 
 The 2026-06-02 "GA4 mobile v1 shipped" entry describes the mobile analytics init
@@ -1964,6 +2086,24 @@ The `/api/revalidate` route handler used `revalidateTag(tag, 'default')`, which 
 All schema additions and renames during the pre-launch period edit `V1__init_schema.sql` in place, rather than creating new `V2__*.sql` migration files. This applies to all tables, columns, indexes, and constraints touched by the User Deletion feature. The convention will end when production deploys; from that point onward, new migrations are append-only.
 
 **Reasoning.** The repo has no production deploy yet; rebuilding the schema from a single V1 file on every dev/stage reset is simpler than managing a growing migration chain. Documented in conventions.md.
+
+---
+
+## 2026-05-18 — Image Router registered as the seventh engineer repo
+
+A new repo `oglasino-image-router` holds a Cloudflare Worker that gates image PUT/GET against R2 for Oglasino's image pipeline. The Image Router engineer agent is now the seventh engineer agent (eighth agent total counting Mastermind).
+
+Stack: TypeScript + Cloudflare Workers + Wrangler 4 + Vitest 3 with `@cloudflare/vitest-pool-workers`; JOSE 6 for JWT verification; Node 22+. The worker has internal structure (handlers/, lib/, types) and is more substantial than the existing `oglasino-router` which is a single file. Deployment via `wrangler deploy` (any env) is forbidden for the agent.
+
+The Image Router is a separate Worker from `oglasino-router`. They share a stack family (Cloudflare Workers + TypeScript + Wrangler) but have different responsibilities: `oglasino-router` is the edge boundary doing domain matching, maintenance gating, and origin forwarding; `oglasino-image-router` gates image upload/retrieval against R2 with JWT-verified access. They have different care areas, different bindings, and different deploy lifecycles. Two repos, two agents.
+
+The `CLAUDE.md` for this repo is marked provisional. A full audit session is planned as the first work in the repo, after which the `CLAUDE.md` is rewritten against the actual code rather than against initial inference.
+
+Updates to meta-documents: Part 2 (repo layout), Part 3 (agent list, deploy ban list), Part 4 (cleanliness commands), Part 9 (stack table), Mastermind bootstrap Phase 5 brief-order, DevOps bootstrap Phase 2 check surfaces.
+
+**Reasoning.** The image pipeline is a distinct security boundary from the edge router. Mixing image-upload gating into `oglasino-router`'s code would compromise both — the edge router's small-file-fast-changes profile, and the image worker's JWT-verification trust-boundary discipline. Separating them keeps each Worker focused on one job.
+
+**Alternatives considered.** Fold the image worker into `oglasino-router` as a second handler (rejected — different deploy lifecycle, different bindings, different trust profile, would force a sprawling combined `CLAUDE.md`). Have the existing Router agent own both repos (rejected — agent-per-repo discipline is already in place across the system; one agent owning two repos is a precedent we don't need and don't want).
 
 ---
 

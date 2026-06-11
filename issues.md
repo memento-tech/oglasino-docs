@@ -4,6 +4,28 @@ Append-only log of out-of-scope findings. Newest at the top. Each entry has a da
 
 ---
 
+## 2026-06-11 — `BAN_REASON_*` constraint messages unregistered in any ErrorCode enum
+
+**Repo:** `oglasino-backend` · **Severity:** low · **Status:** open
+
+`AdminBanRequest` `BAN_REASON_REQUIRED` / `BAN_REASON_TOO_LONG` constraint messages are not
+registered in any `ErrorCode` enum, so they ship `translationKey: null` plus a WARN on the admin
+ban endpoint. Latent error-contract inconsistency; not contact-related (surfaced twice during the
+contact-feature backend sessions). Triage when the admin surface is next touched.
+
+---
+
+## 2026-06-11 — Contact field labels seeded in COMMON instead of INPUT
+
+**Repo:** `oglasino-backend` · **Severity:** low · **Status:** open
+
+The contact form field labels (`contact.email.field.label`, `contact.message.field.label`) are
+seeded in COMMON, but field labels conventionally live in INPUT (per the forgot-password
+precedent). Shipped in COMMON and working; a minor post-launch consistency item, not worth a
+re-seed now.
+
+---
+
 ## 2026-06-09 — iOS permission strings missing for photo-listing flow
 
 **Repo:** `oglasino-expo` · **Severity:** high · **Status:** fixed (pending on-device verification)
@@ -29,7 +51,7 @@ whether it touches the photo library, rather than assume.
 
 ## 2026-06-09 — iOS force-update store URL is still the placeholder
 
-**Repo:** `oglasino-expo` · **Severity:** high · **Status:** open
+**Repo:** `oglasino-expo` · **Severity:** high · **Status:** fixed (2026-06-11)
 
 `HardUpdateScreen.tsx` and `SoftUpdateModal.tsx`: the iOS branch still opens
 `https://memento-tech.com`. A forced (or optional) update on iOS would route users to a
@@ -45,6 +67,8 @@ app-name changes).
 **Resolution:** a standalone brief replaces the iOS branch once Igor provides the Apple
 ID. Must-fix before iOS production release (and before relying on the force-update gate in
 TestFlight).
+
+> **2026-06-11 — fixed** (`oglasino-expo` `dev`, session `ios-store-url-1`). The iOS branch of `getStoreUrl()` in `oglasino-expo/src/lib/utils/storeUrl.ts` now points at `https://apps.apple.com/app/id6779105068` (Apple ID assigned on App Store Connect record creation; bundle `com.oglasino`). Both consumers (`HardUpdateScreen`, `SoftUpdateModal`) inherit the real URL via the shared helper.
 
 ---
 

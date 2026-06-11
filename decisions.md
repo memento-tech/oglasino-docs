@@ -6,6 +6,31 @@ Format: each decision has a date, a one-line summary, the reasoning, and the alt
 
 ---
 
+## 2026-06-11 — Contact form: exact-duplicate notice + server-side message minimum
+
+Contact form exact-duplicate notice: a Redis marker on (lowercased effective
+email + SHA-256 of the exact message), 6h TTL, stamped only after a successful
+send and checked ahead of the per-email throttle so a duplicate never consumes a
+cooldown/daily slot. Returned as 422 `CONTACT_DUPLICATE` / `contact.duplicate`
+(ERRORS namespace), hand-built in the controller like `CONTACT_SEND_FAILED` (not a
+`ContactErrorCode` constant). Server-side message minimum raised to 50, carried as a
+distinct 400 `CONTACT_MESSAGE_TOO_SHORT` / `contact.message.too_short`.
+
+---
+
+## 2026-06-11 — Contact validation keys: accepted VALIDATION-freeze exception
+
+The contact feature's validation keys (`email.empty`, `email.bad`,
+`contact.message.empty` / `.too_short` / `.too_long`) live in the VALIDATION
+namespace, which [conventions](meta/conventions.md) Part 6 Rule 1 marks frozen.
+This is an accepted, documented exception: the keys were seeded there alongside
+the pre-existing generic `email.*` keys for consistency, are shipped and working,
+and will not be migrated. Future new validation keys still go to ERRORS per the
+rule — this exception is specific to the already-seeded contact keys, not a
+relaxation of the freeze.
+
+---
+
 ## 2026-06-10 — Legal docs localized by reader language (Serbian default)
 
 Privacy Policy and Terms of Use now serve per-language on both web and mobile,
@@ -69,8 +94,8 @@ Igor's stated reason.
   declares the picker's Android permissions via manifest merge.
 - **Deny-path UX (factual):** the camera/gallery deny branches were silent dead-ends; now a
   shared `useMediaPermissionDeniedToast()` hook shows a danger toast (`permission.media.denied`)
-  + an Open Settings action (`open.settings.label`, `Linking.openSettings()`) across the three
-  picker surfaces. `MessageInput`'s PHPicker call is left ungated (needs no permission).
+  - an Open Settings action (`open.settings.label`, `Linking.openSettings()`) across the three
+    picker surfaces. `MessageInput`'s PHPicker call is left ungated (needs no permission).
 - **English (not Serbian) chosen for the iOS strings — Igor's call (his stated rationale):**
   optimizes for App Store reviewers.
 - **Rejected:** hand-writing `NS*` keys into `ios.infoPlist` (the plugin is the Expo-idiomatic
@@ -2343,7 +2368,7 @@ Pre-lawyer drafts of the Privacy Policy and Terms of Use authored for Oglasino, 
 **Key choices captured in the drafts:**
 
 - **Controller identity.** Igor Stojanović, individual sole proprietor, Niš, Serbia. Planned incorporation post-launch handled via Terms Assignment clause + future Terms update.
-- **Contact addresses.** privacy@oglasino.com for privacy matters; support@oglasino.com for general support and appeals. Neither mailbox yet operational; both are critical pre-launch action items.
+- **Contact addresses.** Both mailboxes are live and operational as of 2026-06-11. support@oglasino.com — general support and appeals (also the email Reply-To and the contact-form destination); privacy@oglasino.com — privacy channel, display-only on the contact page (not form-routed in v1).
 - **Lawful bases.** Contract for most processing (account, profile, listings, messages, reviews, auto-translation). Legitimate interest for moderation, IP rate-limit logging, audit retention. Consent for preference cookies and the five communication-preference toggles.
 - **Retention.** Active accounts: while account is active. IPs: 30 minutes. Application logs: 90 days. Deletion audit (hashed): 30 days. Banned-user audit (hashed email): 12 months.
 - **No data sale, no AI training on user content.** Mirrored in both documents as explicit user-facing commitments.
@@ -2356,8 +2381,8 @@ Pre-lawyer drafts of the Privacy Policy and Terms of Use authored for Oglasino, 
 
 **Pre-launch action items the operator has committed to (logged separately):**
 
-1. Set up and monitor privacy@oglasino.com.
-2. Set up and monitor support@oglasino.com.
+1. Set up and monitor privacy@oglasino.com. (done 2026-06-11)
+2. Set up and monitor support@oglasino.com. (done 2026-06-11)
 3. Configure Cloudflare R2 bucket jurisdiction to EU.
 4. Accept OpenAI's data-processing addendum.
 5. Add "Manage cookie preferences" footer link.
